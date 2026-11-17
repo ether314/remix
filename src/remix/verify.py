@@ -422,10 +422,16 @@ def run(project: Project, name: str, frames_ok: bool = False, listen=listen, off
     timing, measured = timing_problems(project, folder, record, output, offset)
     sync, mouths = sync_problems(project, folder, record, lines)
     measured["against_original_speech"] = mouths
+    gate = []
+    if script.is_file() and lines:
+        from . import dialogue
+
+        gate = [{"problem": "dialogue gate: " + item} for item in dialogue.problems(project, name, ("script", "picture"))]
     problems = (
         script_problems(project, folder, record, lines)
         + timing
         + sync
+        + gate
         + audio_problems(lines, listen(output))
         + picture_problems(project, lines, record, frames_ok)
         + caption_problems(folder, lines)

@@ -14,8 +14,9 @@ HEARD = [{"word": " Hello", "start": 0.25}, {"word": " there,", "start": 0.5}, {
 def make_remix(project, lines, mode="audio"):
     folder = voices.folder(project, "take")
     folder.mkdir(parents=True)
-    (folder / "lines.json").write_text(json.dumps({"voices": {}, "directions": {}, "lines": lines}))
+    (folder / "lines.json").write_text(json.dumps({"voices": {"host": "Charon", "guest": "Kore"}, "directions": {}, "lines": lines}))
     (folder / "remix.json").write_text(json.dumps({"mode": mode, "voices": "new", "output": "source.mp4"}))
+    (project.root / "audio" / "speech.wav").unlink(missing_ok=True)  # a test tone is not speech to anchor lines to
     (project.root / "transcript").mkdir(exist_ok=True)
     (project.root / "transcript" / "transcript.json").write_text(json.dumps({"text": "Hello there, Dave. Touche.", "segments": []}))
     return folder

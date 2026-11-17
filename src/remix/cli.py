@@ -10,7 +10,7 @@ from typing import Optional
 
 import typer
 
-from . import __version__, config, cost, google, overview, remixes, restyle, verify, voices
+from . import __version__, config, cost, dialogue, google, overview, remixes, restyle, verify, voices
 from . import blueprint as bp
 from .media import MediaError
 from .project import RIGHTS, Project, ProjectError, find, ingest, list_projects, resolve_file, slugify
@@ -269,6 +269,42 @@ def _check(project: Project, name: str, frames_ok: bool = False) -> bool:
     return False
 
 
+def _gate(project: Project, name: str, stages: tuple[str, ...]) -> None:
+    """Stop before a paid step while the dialogue map has holes (see dialogue.py)."""
+    wrong = dialogue.problems(project, name, stages)
+    if wrong:
+        typer.echo("error: the dialogue gate is closed, so nothing was generated:", err=True)
+        for item in wrong[:8]:
+            typer.echo(f"  - {item}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command("dialogue")
+def dialogue_cmd(
+    target: str = typer.Argument(..., help="Project slug or a unique prefix of it."),
+    name: str = typer.Option(..., help="Short name of the remix."),
+) -> None:
+    """The dialogue gate: who says what, when, over which shot, and what is still missing. Writes dialogue.md."""
+    project = _project(target)
+    try:
+        path = dialogue.render(project, name)
+        data, wrong = dialogue.plan(project, name), dialogue.problems(project, name)
+    except (voices.VoiceError, FileNotFoundError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1)
+    talking = [shot for shot in data["shots"] if shot["heard"]]
+    typer.echo(f"wrote projects/{project.slug}/{project.rel(path)}: {_count(len(data['lines']), 'line')} over {_count(len(talking), 'shot')}")
+    typer.echo(f"  {sum(1 for s in talking if s['off_screen'])} shot(s) carry a line whose speaker is off screen; "
+               f"{sum(1 for s in talking if s['silent'])} show someone who must stay silent")
+    if not wrong:
+        typer.echo("dialogue gate open: script, voice and picture agree")
+        return
+    typer.echo(f"dialogue gate CLOSED: {_count(len(wrong), 'problem')}")
+    for item in wrong:
+        typer.echo(f"  - {item}")
+    raise typer.Exit(1)
+
+
 @app.command("audio-remix")
 def audio_remix_cmd(
     target: str = typer.Argument(..., help="Project slug or a unique prefix of it."),
@@ -378,6 +414,8 @@ def voices_cmd(
         chosen = script["lines"][:pilot] if pilot else script["lines"]
         cued = sum(1 for line in chosen if voices.cues(line))
         typer.echo(f"{cued} of {_count(len(chosen), 'line')} carry vocal cues (sighs, chuckles, breaths, pauses)")
+        if not pilot:
+            _gate(project, name, ("script",))
         if not pilot and not plain and cued < voices.PERFORMED * len(chosen):
             typer.echo(
                 "error: this script would be spoken flat. The standing rule is expressive, natural voices: give at least "
@@ -460,6 +498,8 @@ def restyle_cmd(
     project = _project(target)
     try:
         chosen = tuple(int(n) for n in only.replace(" ", "").split(",") if n) or None
+        if not dry_run:
+            _gate(project, name, dialogue.STAGES)
         todo = restyle.pending_shots(project, name, chosen)
         planned = restyle.billed_usd(todo, resolution)
         typer.echo(f"estimate: up to ${planned:.2f} for {_count(len(todo), 'shot')} still to make at {resolution}")

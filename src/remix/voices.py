@@ -209,7 +209,12 @@ def write_lines(project: Project, name: str, force: bool = False) -> Path:
     if path.is_file() and not force:
         raise VoiceError("lines.json already exists for this remix; pass --force to rebuild it from the transcript")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(build_lines(project), indent=2, ensure_ascii=False), encoding="utf-8")
+    script = build_lines(project)
+    # Transcript stamps sit before the real speech; a script starts life on the measured utterances.
+    for line, real in zip(script["lines"], utterances(project, script["lines"])):
+        if real["found"]:
+            line["start"], line["end"] = real["start"], real["end"]
+    path.write_text(dump_script(script), encoding="utf-8")
     return path
 
 

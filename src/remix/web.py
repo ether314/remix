@@ -21,7 +21,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import blueprint as bp
-from . import config, cost, restyle, verify, voices
+from . import config, cost, dialogue, restyle, verify, voices
 from .project import Project, ProjectError, find, ingest, list_projects, now_iso, slugify
 
 PORT = int(os.environ.get("REMIX_WEB_PORT", "8765"))
@@ -133,6 +133,26 @@ def summary(project: Project) -> dict:
     }
 
 
+_GATES: dict[tuple, list[str]] = {}
+
+
+def dialogue_gate(project: Project, remix: Path) -> list[str] | None:
+    """The dialogue gate's problems for a take with a script (None without one), remembered until its files change."""
+    if not (remix / "lines.json").is_file():
+        return None
+    watched = [remix / "lines.json", remix / "look.json", remix / "voice.json", project.root / "blueprint.json", project.root / "timeline.json"]
+    look = _read(remix / "look.json") or {}
+    if look.get("audio_from"):
+        watched.append(project.root / "remixes" / slugify(look["audio_from"]) / "voice.json")
+    key = (str(remix), tuple(f.stat().st_mtime if f.is_file() else 0 for f in watched))
+    if key not in _GATES:
+        try:
+            _GATES[key] = dialogue.problems(project, remix.name)
+        except (voices.VoiceError, OSError, ValueError, KeyError) as exc:
+            _GATES[key] = [f"the dialogue map could not be built: {exc}"]
+    return _GATES[key]
+
+
 def remix_views(project: Project, rows: list[dict]) -> list[dict]:
     folder = project.root / "remixes"
     views = []
@@ -155,6 +175,7 @@ def remix_views(project: Project, rows: list[dict]) -> list[dict]:
                 "look": {k: look.get(k) for k in ("style", "audio_from", "characters")} if look else None,
                 "restyled_shots": sorted(int(f.name[:4]) for f in clips.glob("[0-9][0-9][0-9][0-9]_restyled.mp4")) if clips.is_dir() else [],
                 "check_sheets": [project.rel(f) for f in sorted((remix / "check").glob("sheet_*.jpg"))],
+                "dialogue": dialogue_gate(project, remix),
                 "track": project.rel(track) if track else None,
                 "voice": project.rel(voice) if voice.is_file() else None,
                 "check": _read(remix / "verify.json") if verify.passed(remix) or (remix / "verify.json").is_file() else None,
@@ -362,6 +383,9 @@ def start_restyle(project: Project, name: str, shots: list, approve_over_cap: bo
         raise Refused("shot numbers must be whole numbers", 400) from None
     if not todo:
         raise Refused("nothing to make: every chosen shot already has its restyled picture")
+    closed = dialogue_gate(project, folder)
+    if closed:
+        raise Refused("the dialogue gate is closed, so no picture is generated yet: " + closed[0])
     made = len(list((folder / "shots").glob("*_restyled.mp4")))
     if only is None and made < PILOT_SHOTS:
         raise Refused(f"pilot {PILOT_SHOTS} or 3 shots and look at them first: running every shot is the expensive step")

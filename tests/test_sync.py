@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from remix import remixes, restyle, verify, voices
+from remix import dialogue, remixes, restyle, verify, voices
 from test_voices import fake_wav, write_script
 
 LINES = [
@@ -263,3 +263,29 @@ def test_each_shot_prompt_names_the_speaker_the_seconds_and_who_stays_silent():
     assert "the grasshopper is heard from off screen" in only_dave and "Nobody on screen speaks" in only_dave
     assert "Dave does not speak in this shot and only listens, mouth closed." in only_dave
     assert restyle.heard_in(shot, lines, stretch=2.0)[1]["from"] == 4.0  # a short shot slowed for the model
+
+
+def test_the_dialogue_gate_stays_closed_until_script_and_picture_agree(project):
+    speech_stem(project, [(0.5, 1.3), (2.0, 2.8)], seconds=4.0)
+    stamped = [
+        {"id": 1, "start": 0.2, "end": 1.3, "speaker": "host", "text": "Hello there."},
+        {"id": 2, "start": 1.6, "end": 2.8, "speaker": "guest", "text": "Good morning."},
+    ]
+    write_script(project, "dub", stamped)
+    shots = [{"index": 1, "start": 0.0, "end": 1.6, "duration": 1.6}, {"index": 2, "start": 1.6, "end": 4.0, "duration": 2.4}]
+    (project.root / "timeline.json").write_text(json.dumps({"shots": shots}))
+    (project.root / "blueprint.json").write_text(json.dumps({"characters": [{"id": "host", "shots": [1]}], "shots": []}))
+
+    closed = dialogue.problems(project, "dub")
+    assert any(p.startswith("script:") and "--anchor" in p for p in closed)  # slots still on transcript stamps
+    assert any(p.startswith("picture:") and "[2]" in p for p in closed)  # nobody has said who shot 2 shows
+    voices.anchor(project, "dub")
+    assert [p for p in dialogue.problems(project, "dub") if p.startswith("script:")] == []
+    (project.root / "blueprint.json").write_text(json.dumps({"characters": [{"id": "host", "shots": [1, 2]}], "shots": []}))
+    assert dialogue.problems(project, "dub") == []
+
+    shot = dialogue.plan(project, "dub")["shots"][1]
+    assert shot["on_screen"] == ["host"] and shot["off_screen"] == ["guest"] and shot["silent"] == ["host"]  # the guest is heard over the host
+    assert "| 2 |" in dialogue.render(project, "dub").read_text()
+    (project.root / "blueprint.json").write_text(json.dumps({"characters": [{"id": "host", "shots": [1]}], "no_one_on_screen": [2], "shots": []}))
+    assert dialogue.problems(project, "dub") == [] and dialogue.plan(project, "dub")["shots"][1]["on_screen"] == []

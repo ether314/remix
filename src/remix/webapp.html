@@ -218,6 +218,8 @@ function renderMusic() {
         ${t.voice_summary ? `<p class="small soft">${esc(Object.entries(t.voice_summary.voices || {}).map(v => v[0] + ': ' + v[1]).join(', '))} ·
           ${t.voice_summary.lines} lines, ${t.voice_summary.sped_up} sped up, ${t.voice_summary.overrun} run past their slot
           ${t.voice_summary.suspect ? `· <span class="warn">${t.voice_summary.suspect} suspiciously long: check before using</span>` : ''}</p>` : ''}` : ''}
+      ${t.dialogue && t.voice ? (t.dialogue.length ? `<p class="small err">Dialogue gate closed: ${esc(t.dialogue.slice(0, 2).join(' | '))}${t.dialogue.length > 2 ? ` (and ${t.dialogue.length - 2} more)` : ''}</p>`
+        : '<p class="small ok">Dialogue gate open: every line sits on the original speech, the voices land on it, and each shot knows who speaks and who stays silent.</p>') : ''}
       ${t.output ? `<p class="small soft">The video below uses the <b>${esc(t.voices || 'original')}</b> voices.</p>` : ''}
       ${t.output ? `<video controls preload="metadata" src="${media(t.output)}"></video>
         ${lv ? `<table><tr><th>Loudness</th><th>Original</th><th>This remix</th></tr>${Object.keys(lv).map(k =>
@@ -259,6 +261,8 @@ function renderRestyle() {
     return `<div class="take"><div class="head"><b>${esc(t.name)}</b><span class="soft small">${money(t.spent)} spent · sound from ${esc(t.look.audio_from || t.audio_from || '?')}</span>
         ${t.approved ? chip('done', 'Approved') : finished ? '' : chip('', t.restyled_shots.length ? 'Pilot' : 'Not started')}</div>
       <p class="small">${esc(t.look.style)}</p>
+      ${t.dialogue ? (t.dialogue.length ? `<p class="small err">Dialogue gate closed: ${esc(t.dialogue.slice(0, 2).join(' | '))}${t.dialogue.length > 2 ? ` (and ${t.dialogue.length - 2} more)` : ''}</p>`
+        : '<p class="small ok">Dialogue gate open: every line sits on the original speech, the voices land on it, and each shot knows who speaks and who stays silent.</p>') : ''}
       <p class="small soft">${t.restyled_shots.length} of ${P.shots.length} shots restyled${failed.length ? ` · <span class="warn">the last run failed on shots ${esc(failed.join(', '))}; run again to retry them</span>` : ''}</p>
       ${left.length ? `<div class="row"><input type="text" class="rs-shots" data-keep id="rs-shots-${esc(t.name)}" value="${esc(val('rs-shots-' + t.name, pilotDefault))}" style="max-width:160px" aria-label="Shots to pilot">
           <button data-do="restyle" data-pilot="1" data-n="${esc(t.name)}" ${canPay ? '' : 'disabled'}>Pilot these shots · ${money(shotsUsd(pickedShots))}</button>
