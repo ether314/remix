@@ -277,6 +277,7 @@ def audio_remix_cmd(
     music_gain: float = typer.Option(0.0, help="Trim in dB on top of matching the original background level."),
     no_speech: bool = typer.Option(False, "--no-speech", help="Leave the original voices out."),
     new_voices: bool = typer.Option(False, "--new-voices", help="Use this remix's voice.wav instead of the original voices."),
+    defer_check: bool = typer.Option(False, "--defer-check", help="Do not run the check now. The video stays unverified until `remix verify` passes."),
 ) -> None:
     """Replace the background audio with new music, keeping the original picture."""
     project = _project(target)
@@ -293,6 +294,9 @@ def audio_remix_cmd(
         f"  music set {record['music_gain_db']:+.1f} dB to sit at the old background level, "
         f"{record['music_fit']}, voices: {record['voices']}, {record['duration']:.1f}s"
     )
+    if defer_check:
+        typer.echo("NOT verified: the check was deferred. Run `remix verify` before this video is handed over or approved.")
+        raise typer.Exit(UNVERIFIED)
     if not _check(project, name):
         raise typer.Exit(UNVERIFIED)
 
@@ -450,6 +454,7 @@ def restyle_cmd(
     dry_run: bool = typer.Option(False, "--dry-run", help="Do everything except the paid calls, using the source shots."),
     yes: bool = typer.Option(False, "--yes", help="Run even if the estimate is above the auto-run cap."),
     workers: int = typer.Option(3, help="Shots sent to the model at once. The sign-in token lasts an hour, so long videos need more."),
+    defer_check: bool = typer.Option(False, "--defer-check", help="Do not run the check now. The video stays unverified until `remix verify` passes."),
 ) -> None:
     """Restyle every shot of a video, add the remix's audio, and burn in its captions (paid)."""
     project = _project(target)
@@ -475,6 +480,9 @@ def restyle_cmd(
         # A pilot: most of the picture is still the source, so there is no finished video to check yet.
         typer.echo(f"  {_count(len(record['pending']), 'shot')} still show the original picture: this is a pilot, not checked or approvable yet")
         return
+    if defer_check and not dry_run:
+        typer.echo("NOT verified: the check was deferred. Run `remix verify` before this video is handed over or approved.")
+        raise typer.Exit(UNVERIFIED)
     if not dry_run and not _check(project, name):
         raise typer.Exit(UNVERIFIED)
 
