@@ -468,6 +468,10 @@ def generate(
             note.write_text(json.dumps({"key": key, **usage}), encoding="utf-8")
         return wav, {**usage, "respoken": 1, "key": key}
 
+    def tried(line: dict) -> int:
+        note = takes / f"{line['id']:04d}.json"
+        return json.loads(note.read_text(encoding="utf-8")).get("tries", 0) if note.is_file() else 0
+
     def measure(wav: bytes, line: dict) -> float:
         """Seconds a take's words still end after the slot's end once its tempo is fitted (negative: before)."""
         clip = trim_silence(_decode(wav))
@@ -485,20 +489,25 @@ def generate(
         # word about pace, which sounds better than squeezing or stretching it. The closest take wins.
         for attempt in range(1, rerolls + 1):
             off = [(i, measure(spoken[i][0], line)) for i, line in enumerate(lines)]
-            off = [(i, error) for i, error in off if abs(error) > FIT]
+            # A line is retaken at most `rerolls` times in its life, not on every run: once it has been
+            # tried, its take stays put, so a video that was checked keeps the voices it was checked with.
+            off = [(i, error) for i, error in off if abs(error) > FIT and tried(lines[i]) < attempt]
             if not off:
-                break
+                continue
             retakes = list(pool.map(
                 lambda item: speak(lines[item[0]], "speaking quickly" if item[1] > 0 else "speaking slowly, unhurried", attempt), off
             ))
             for (i, error), (wav, usage) in zip(off, retakes):
                 for key in tokens:
                     tokens[key] += usage.get(key, 0)
+                note = takes / f"{lines[i]['id']:04d}.json"
+                kept = json.loads(note.read_text(encoding="utf-8")) if note.is_file() else {"key": usage["key"]}
                 if abs(measure(wav, lines[i])) < abs(error):
                     spoken[i] = (wav, usage)
                     rerolled.add(lines[i]["id"])
                     (takes / f"{lines[i]['id']:04d}.wav").write_bytes(wav)
-                    (takes / f"{lines[i]['id']:04d}.json").write_text(json.dumps({"key": usage["key"], "try": attempt}), encoding="utf-8")
+                    kept = {"key": usage["key"], "try": attempt}
+                note.write_text(json.dumps({**kept, "tries": attempt}), encoding="utf-8")
 
     def fade(clip, at_start: bool):
         clip = clip.copy()
