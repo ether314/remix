@@ -369,6 +369,20 @@ def cue_parts(clip, line: dict) -> tuple[int, int]:
     return lead, tail
 
 
+def word_span(clip, lead: int = 0, tail: int = 0) -> tuple[int, int]:
+    """Samples where a take's audible words begin and end, between any cues.
+
+    AI takes open with a soft breath and trail off quietly. Measured the way the original speech is
+    measured, the words start a little after the clip does, and that is the point that has to land
+    on the mouth's first movement.
+    """
+    low, high = lead / RATE, (len(clip) - tail) / RATE
+    inside = [(a, b) for a, b in spans(voiced(loudness(clip, RATE))) if b > low + 0.01 and a < high - 0.01]
+    if not inside:
+        return lead, len(clip) - tail
+    return max(int(inside[0][0] * RATE), lead), min(int(inside[-1][1] * RATE), len(clip) - tail)
+
+
 def trim_silence(samples, floor: float = 0.004, margin: int = RATE // 30):
     """Drop the quiet lead-in and tail a speech model adds, keeping a few milliseconds of margin."""
     import numpy as np
@@ -457,8 +471,8 @@ def generate(
     def measure(wav: bytes, line: dict) -> float:
         """Seconds a take's words still end after the slot's end once its tempo is fitted (negative: before)."""
         clip = trim_silence(_decode(wav))
-        lead, tail = cue_parts(clip, line)
-        words, target = (len(clip) - lead - tail) / RATE, max(line["end"] - line["start"], 0.2)
+        first, last = word_span(clip, *cue_parts(clip, line))
+        words, target = (last - first) / RATE, max(line["end"] - line["start"], 0.2)
         return words / fit_speed(words, target) - target
 
     tokens, rerolled = {"text_tokens": 0, "audio_tokens": 0, "respoken": 0}, set()
@@ -501,30 +515,36 @@ def generate(
         clip = trim_silence(_decode(wav))
         natural = len(clip) / RATE
         lead, tail = cue_parts(clip, line)
+        first, last = word_span(clip, lead, tail)
         target = max(line["end"] - line["start"], 0.2)
-        speed = fit_speed((len(clip) - lead - tail) / RATE, target)
+        speed = fit_speed((last - first) / RATE, target)
         if abs(speed - 1.0) < 0.02:
             speed = 1.0
         else:
             clip = _decode(_encode(clip), speed)
             lead, tail = int(lead / speed), int(tail / speed)
+            first, last = word_span(clip, lead, tail)
         following = lines[i + 1]["start"] if i + 1 < len(lines) else duration
         notes = []
-        # The line's first WORD lands on the slot's start, where the mouth starts moving. A cue in
-        # front of it plays in the gap before the line; with no gap it is left out.
-        if lead and line["start"] - lead / RATE < placed_end + 0.03:
-            clip, lead = fade(clip[lead:], True), 0
-            notes.append("leading cue left out: no gap before the line")
-        elif not lead and lead_seconds(line) > CUE_SECONDS["long pause"]:
+        if not lead and lead_seconds(line) > CUE_SECONDS["long pause"]:
             notes.append("leading cue not told apart from the words: check where the first word lands")
-        begin_at = max(line["start"] - lead / RATE, 0.0)
+        # The first audible WORD lands on the slot's start, where the mouth starts moving. A breath
+        # or a cue in front of it plays in the gap before the line; what does not fit there is cut.
+        begin_at = line["start"] - first / RATE
+        earliest = max(placed_end + 0.03, 0.0)
+        if begin_at < earliest:
+            cut = min(int((earliest - begin_at) * RATE) + 1, first)
+            if lead and cut > RATE // 20:
+                notes.append("leading cue left out or shortened: no gap before the line")
+            clip, first, last, lead = fade(clip[cut:], True), first - cut, last - cut, max(lead - cut, 0)
+            begin_at = line["start"] - first / RATE
         if tail and begin_at + len(clip) / RATE > following - GAP:
             clip, tail = fade(clip[: len(clip) - tail], False), 0
             notes.append("trailing cue left out: the next line starts too soon")
-        begin = int(begin_at * RATE)
+        begin = int(max(begin_at, 0.0) * RATE)
         clip = clip[: max(len(track) - begin, 0)]
         track[begin : begin + len(clip)] += clip
-        words_start, words_end = begin_at + lead / RATE, begin_at + (len(clip) - tail) / RATE
+        words_start, words_end = begin_at + first / RATE, begin_at + last / RATE
         placed_end = begin_at + len(clip) / RATE
         report.append(
             {

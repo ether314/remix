@@ -255,7 +255,7 @@ def test_each_shot_prompt_names_the_speaker_the_seconds_and_who_stays_silent():
         {"id": 3, "start": 13.95, "end": 15.0, "speaker": "mantis", "text": "Too short to count."},
     ]
     heard = restyle.heard_in(shot, lines)
-    assert [(h["speaker"], h["from"], h["to"]) for h in heard] == [("mantis", 0.0, 1.0), ("dave", 2.0, 3.5)]
+    assert [(h["speaker"], h["from"], h["to"]) for h in heard] == [("mantis", 0.0, 1.0), ("dave", 2.0, 3.5)]  # 0.05 s of line 3 does not count
     both = restyle.shot_prompt(look, shot, ["dave", "mantis"], heard, ("dave", "mantis"))
     assert 'From 0.0 to 1.0 seconds the grasshopper says: "Where does that road end?"' in both
     assert 'From 2.0 to 3.5 seconds Dave says: "Nowhere."' in both and "Only the grasshopper and Dave moves a mouth" in both

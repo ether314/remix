@@ -138,7 +138,9 @@ def heard_in(shot: dict, lines: list[dict], stretch: float = 1.0) -> list[dict]:
     heard = []
     for line in lines:
         start, end = max(line["start"], shot["start"]), min(line["end"], shot["end"])
-        if end - start >= 0.15:
+        # A line counts for a shot when a real part of it is heard there; a few frames of a line
+        # that starts just before the cut belong to the next shot.
+        if end - start >= 0.3 or (end > start and end - start >= 0.6 * (line["end"] - line["start"])):
             heard.append({"speaker": line["speaker"], "text": line["text"],
                           "from": round((start - shot["start"]) * stretch, 1), "to": round((end - shot["start"]) * stretch, 1)})
     return heard
@@ -228,6 +230,14 @@ def full(
                 f"the audio of `{slugify(audio_from)}` was made from a different script than this remix's lines.json "
                 f"(first differing lines: {differing}); the voices, captions and picture must share one script"
             )
+    # The prompts say when each line is HEARD, so they use where the voice was actually placed.
+    placed = project.root / "remixes" / slugify(audio_from) / "voice.json"
+    report = json.loads(placed.read_text(encoding="utf-8")) if placed.is_file() else {}
+    times = {row["id"]: row for row in report.get("report", []) if "words_start" in row} if report.get("script") == voices.script_hash(lines) else {}
+    heard_lines = [
+        {**line, "start": times[line["id"]]["words_start"], "end": times[line["id"]]["words_end"]} if line["id"] in times else line
+        for line in lines
+    ]
     script_time = (folder / "lines.json").stat().st_mtime
     stale: list[int] = []
     blueprint =json.loads((project.root / "blueprint.json").read_text(encoding="utf-8"))
@@ -271,7 +281,7 @@ def full(
             present = correction_for.get("characters") or [c["id"] for c in blueprint["characters"] if number in (c.get("shots") or [])]
             described = next(s for s in blueprint["shots"] if s["index"] == number)
             speakers = tuple(dict.fromkeys(line["speaker"] for line in lines))
-            prompt = shot_prompt(look, described, present, heard_in(shot, lines, stretch), speakers)
+            prompt = shot_prompt(look, described, present, heard_in(shot, heard_lines, stretch), speakers)
             (clips / f"{number:04d}_prompt.txt").write_text(prompt, encoding="utf-8")
             try:
                 video, usage = edit(source.read_bytes(), prompt, resolution, references)
