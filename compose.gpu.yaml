@@ -1,0 +1,25 @@
+# NVIDIA GPU override for compose.yaml. Always pass both files:
+#   docker compose -f compose.yaml -f compose.gpu.yaml build
+#   docker compose -f compose.yaml -f compose.gpu.yaml run --rm remix decompose inbox/<file>
+# Needs an NVIDIA driver on the host and the NVIDIA runtime in Docker (built into Docker Desktop on WSL 2).
+# The pipeline picks the GPU by itself when it can see one; manifest.json records the device each step used.
+
+x-gpu: &gpu
+  build:
+    context: .
+    dockerfile: Dockerfile.gpu
+  image: remix:gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+# Every service in compose.yaml that runs the pipeline is listed here, so none is left on the CPU image.
+services:
+  remix:
+    <<: *gpu
+  web:
+    <<: *gpu

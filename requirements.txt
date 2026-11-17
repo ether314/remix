@@ -1,0 +1,13 @@
+# CPU PyTorch is installed first in the Dockerfile from the PyTorch index; these pins keep it in place.
+# torch stays on 2.5.x: Demucs 4.0.1 checkpoints need the pre-2.6 torch.load default.
+torch==2.5.1
+torchaudio==2.5.1
+numpy>=2.0,<2.3
+demucs==4.0.1
+soundfile>=0.12
+faster-whisper>=1.1,<2
+scenedetect[opencv-headless]>=0.6.4,<0.7
+pillow>=10
+pyyaml>=6
+typer>=0.12
+pytest>=8

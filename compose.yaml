@@ -1,0 +1,32 @@
+name: remix
+
+x-remix: &remix
+  build: .
+  image: remix:local
+  init: true
+  volumes:
+    - ./inbox:/data/inbox          # drop videos here
+    - ./projects:/data/projects    # one folder per decomposed video
+    - ./src:/app/src               # live code: edits apply without a rebuild
+    - ./tests:/app/tests
+    - models:/models               # Whisper and Demucs weights, downloaded on first use
+  environment:
+    REMIX_WHISPER_MODEL: ${REMIX_WHISPER_MODEL:-large-v3-turbo}
+    HF_HUB_DISABLE_PROGRESS_BARS: "1"   # keep model-download logs short
+    # Paid Google steps: a one-hour token passed in from the host, never stored (see CLAUDE.md).
+    GOOGLE_ACCESS_TOKEN: ${GOOGLE_ACCESS_TOKEN:-}
+    GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
+
+services:
+  remix:
+    <<: *remix
+
+  # The web app. Published on this computer only: it can start paid steps.
+  web:
+    <<: *remix
+    entrypoint: ["python", "-m", "remix.web"]
+    ports:
+      - "127.0.0.1:8765:8765"
+
+volumes:
+  models:

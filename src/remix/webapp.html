@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remix</title>
+<style>
+  :root { --bg:#f5f4f1; --panel:#fff; --ink:#1d1c1a; --soft:#6b6861; --line:#dedbd4; --accent:#2f5fd0;
+          --ok:#1d7a46; --warn:#a15c00; --bad:#b3261e; --chip:#eceae5; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161513; --panel:#201f1c; --ink:#ecebe7; --soft:#a09c93; --line:#383631; --accent:#8fb0ff;
+            --ok:#6fd29a; --warn:#f0b35a; --bad:#ff8a80; --chip:#2c2a26; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui, "Segoe UI", sans-serif; }
+  .wrap { display:grid; grid-template-columns:290px 1fr; min-height:100vh; }
+  aside { border-right:1px solid var(--line); padding:18px 16px; background:var(--panel); }
+  main { padding:22px 26px 60px; max-width:1060px; }
+  h1 { font-size:19px; margin:0 0 14px; } h2 { font-size:16px; margin:0; } h3 { font-size:14px; margin:16px 0 6px; }
+  p { margin:6px 0; } .soft { color:var(--soft); } .small { font-size:13px; }
+  button { font:inherit; padding:7px 13px; border-radius:7px; border:1px solid var(--line); background:var(--panel);
+           color:var(--ink); cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  @media (prefers-color-scheme: dark) { button.primary { color:#10131c; } }
+  button.on { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  textarea, input[type=text] { width:100%; font:inherit; padding:8px 10px; border-radius:7px; border:1px solid var(--line);
+           background:var(--bg); color:var(--ink); }
+  textarea { min-height:150px; resize:vertical; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:16px 18px; margin:0 0 14px; }
+  .head { display:flex; align-items:center; gap:10px; }
+  .num { width:26px; height:26px; border-radius:50%; background:var(--chip); display:grid; place-items:center;
+         font-weight:600; font-size:13px; flex:none; }
+  .chip { margin-left:auto; font-size:12px; padding:2px 9px; border-radius:20px; background:var(--chip); color:var(--soft); }
+  .chip.done { color:var(--ok); } .chip.ready { color:var(--accent); } .chip.run { color:var(--warn); }
+  .locked > .body { display:none; } .locked { opacity:.72; }
+  .body { margin-top:12px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0; }
+  .proj { display:block; width:100%; text-align:left; margin:0 0 6px; }
+  .proj small { display:block; color:var(--soft); }
+  .drop { border:1.5px dashed var(--line); border-radius:9px; padding:14px; text-align:center; margin:12px 0; color:var(--soft); }
+  .drop.over { border-color:var(--accent); color:var(--accent); }
+  table { border-collapse:collapse; width:100%; font-size:14px; } th, td { text-align:left; padding:6px 8px;
+          border-bottom:1px solid var(--line); vertical-align:top; } th { color:var(--soft); font-weight:500; }
+  td.num-cell { text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  video, audio { width:100%; max-width:100%; } video { max-height:440px; background:#000; border-radius:8px; }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:14px; } @media (max-width:900px) { .wrap, .two { grid-template-columns:1fr; } }
+  img.sheet { width:100%; border-radius:8px; margin:6px 0; border:1px solid var(--line); }
+  pre { white-space:pre-wrap; font:13px/1.5 ui-monospace, Consolas, monospace; background:var(--bg); padding:10px 12px;
+        border-radius:8px; max-height:260px; overflow:auto; margin:6px 0; }
+  .tag { display:inline-block; background:var(--chip); border-radius:20px; padding:1px 9px; margin:2px 4px 2px 0; font-size:13px; }
+  .take { border:1px solid var(--line); border-radius:9px; padding:12px 14px; margin:10px 0; }
+  .err { color:var(--bad); } .ok { color:var(--ok); } .warn { color:var(--warn); }
+  details { margin:6px 0; } summary { cursor:pointer; color:var(--soft); }
+  #toast { position:fixed; right:18px; bottom:18px; background:var(--ink); color:var(--bg); padding:10px 14px;
+           border-radius:9px; max-width:420px; display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <aside>
+    <h1>Remix</h1>
+    <div id="money"></div>
+    <div class="drop" id="drop">Drop a video here, or <label style="color:var(--accent);cursor:pointer">choose a file<input id="file" type="file" accept="video/*" hidden></label></div>
+    <div id="projects"></div>
+    <div id="jobs"></div>
+  </aside>
+  <main id="main"><p class="soft">Loading...</p></main>
+</div>
+<div id="toast"></div>
+<script>
+let S = null, P = null, slug = localStorage.getItem('remix.slug'), timer = null, draft = {}, keep = {};
+const $ = id => document.getElementById(id);
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money = v => '$' + Number(v).toFixed(2);
+const clock = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+const media = rel => '/media/' + encodeURIComponent(slug) + '/' + rel.split('/').map(encodeURIComponent).join('/');
+
+function toast(text, bad) {
+  const t = $('toast'); t.textContent = text; t.style.display = 'block'; t.style.background = bad ? 'var(--bad)' : 'var(--ink)';
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 6000);
+}
+async function api(path, body) {
+  const opts = body === undefined ? {} : {method: 'POST', headers: {'X-Remix': '1', 'Content-Type': 'application/json'}, body: JSON.stringify(body)};
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({error: 'The app did not answer properly.'}));
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+async function act(path, body, done) {
+  try { await api(path, body); if (done) toast(done); } catch (e) { toast(e.message, true); }
+  await refresh();
+}
+async function refresh() {
+  try {
+    S = await api('/api/state');
+    if (!S.projects.some(p => p.slug === slug)) slug = S.projects.length ? S.projects[0].slug : null;
+    P = slug ? await api('/api/project/' + encodeURIComponent(slug)) : null;
+  } catch (e) { toast(e.message, true); return; }
+  render();
+  clearTimeout(timer);
+  if (S.jobs.some(j => j.status === 'queued' || j.status === 'running')) timer = setTimeout(refresh, 2500);
+}
+
+function chip(kind, text) { return `<span class="chip ${kind}">${esc(text)}</span>`; }
+function gate(n, title, status, lockedWhy, body) {
+  const kinds = {done: 'done', ready: 'ready', running: 'run', locked: ''};
+  const labels = {done: 'Done', ready: 'Your turn', running: 'Working', locked: 'Locked'};
+  return `<section class="card ${status === 'locked' ? 'locked' : ''}"><div class="head"><span class="num">${n}</span><h2>${esc(title)}</h2>${chip(kinds[status], labels[status])}</div>
+    ${status === 'locked' ? `<p class="soft small" style="margin:8px 0 0 36px">${esc(lockedWhy)}</p>` : ''}<div class="body">${body}</div></section>`;
+}
+
+function renderSide() {
+  const c = S.credit;
+  $('money').innerHTML = `<div class="card" style="padding:12px 14px">
+      <div><b>${money(S.spent)}</b> <span class="soft">spent so far</span></div>
+      ${c ? `<div class="small soft">${money(c.left)} of ${esc(c.name)} left, ${c.days_left} days to go</div>` : ''}
+      <div class="small soft">Asks before any step over ${money(S.cap)}</div>
+      <div class="small ${S.google.ready ? 'ok' : 'warn'}">${S.google.ready ? 'Google access ready (lasts about an hour from start; running ' + S.google.minutes_running + ' min)' : 'No Google access: paid steps are off. Start with start-web.cmd.'}</div>
+    </div>`;
+  $('projects').innerHTML = '<h3>Videos</h3>' + (S.projects.length ? S.projects.map(p =>
+    `<button class="proj ${p.slug === slug ? 'on' : ''}" data-do="pick" data-slug="${esc(p.slug)}">${esc(p.name)}
+       <small>${clock(p.duration)} · ${esc(p.rights || 'rights not set')}${p.busy ? ' · working' : ''}</small></button>`).join('')
+    : '<p class="soft small">None yet.</p>');
+  const live = S.jobs.filter(j => j.status === 'queued' || j.status === 'running');
+  const last = S.jobs.find(j => j.status === 'failed');
+  $('jobs').innerHTML = (live.length ? '<h3>Working</h3>' + live.map(j =>
+    `<div class="small"><b>${esc(j.label)}</b> <span class="warn">${esc(j.status)}</span><pre>${esc(j.log.slice(-4).join('\n') || 'starting...')}</pre></div>`).join('') : '')
+    + (last ? `<h3>Last failure</h3><div class="small"><b>${esc(last.label)}</b><pre class="err">${esc(last.log.slice(-6).join('\n'))}</pre></div>` : '');
+}
+
+function renderRights() {
+  const names = {own: 'It is mine', client: "It is a client's", template: 'Someone else\'s (template only)'};
+  const body = `<div class="two"><div><video controls preload="metadata" src="${media(P.source_file)}"></video></div><div>
+      <p class="soft small">${clock(P.duration)} · ${P.source.width}×${P.source.height} · ${esc(P.source.fps)} fps · ${esc(P.source.video_codec)}</p>
+      <p>Whose video is this? It decides whether its footage, music and voices may appear in a remix.</p>
+      <div class="row">${Object.keys(names).map(k => `<button class="${P.rights === k ? 'on' : ''}" data-do="rights" data-v="${k}">${esc(names[k])}</button>`).join('')}</div>
+      ${P.rights === 'template' ? '<p class="small warn">Template: only modes that replace everything (regenerate, motion-graphics rebuild) are allowed.</p>' : ''}
+    </div></div>`;
+  return gate(1, 'Source and rights', P.rights ? 'done' : 'ready', '', body);
+}
+
+function renderDecompose() {
+  const order = ['audio', 'stems', 'transcript', 'shots', 'overview'];
+  const finished = order.every(s => ['done', 'skipped'].includes(P.steps[s]));
+  const status = P.busy && !finished ? 'running' : !finished ? 'ready' : P.gates.decompose ? 'done' : 'ready';
+  let body = `<div class="row">${order.map(s => { const d = P.step_details[s] || {};
+      return `<span class="tag">${s}: ${esc(d.status || 'not run')}${d.seconds ? ' · ' + d.seconds + 's' : ''}</span>`; }).join('')}
+      <button data-do="decompose" ${P.busy ? 'disabled' : ''}>${finished ? 'Run again' : 'Run'}</button></div>`;
+  if (finished) {
+    body += `<div class="two"><div><h3>Voices</h3>${P.stems[0] ? `<audio controls preload="none" src="${media(P.stems[0])}"></audio>` : '<p class="soft small">No audio.</p>'}</div>
+             <div><h3>Music and effects</h3>${P.stems[1] ? `<audio controls preload="none" src="${media(P.stems[1])}"></audio>` : ''}</div></div>
+      <h3>Script</h3><pre>${esc(P.script || '(no speech found)')}</pre>
+      ${P.dropped.length ? `<p class="small soft">${P.dropped.length} line(s) dropped as invented over silence: ${esc(P.dropped.map(d => d.text).join(' / '))}</p>` : ''}
+      <details><summary>${P.shots.length} shots on ${P.sheets.length} contact sheets</summary>${P.sheets.map(f => `<img class="sheet" loading="lazy" src="${media(f)}">`).join('')}</details>
+      <div class="row">${P.gates.decompose ? `<span class="ok">Reviewed.</span> <button data-do="gate" data-g="decompose" data-v="0">Undo</button>`
+        : `<button class="primary" data-do="gate" data-g="decompose" data-v="1">This looks right</button>`}</div>`;
+  }
+  return gate(2, 'Take it apart', status, '', body);
+}
+
+function renderBlueprint() {
+  if (!P.gates.decompose) return gate(3, 'Blueprint', 'locked', 'Review the decomposition first.', '');
+  const b = P.blueprint, bad = P.blueprint_problems;
+  if (!b || (bad && bad.length)) {
+    return gate(3, 'Blueprint', 'ready', '', `<p>Claude writes the blueprint by looking at the frames and script. In Claude Code, say:</p>
+      <pre>Write the blueprint for ${esc(P.slug)}</pre>
+      ${bad && bad.length ? `<p class="small warn">Started but unfinished (${bad.length} thing(s) missing). First: ${esc(bad[0])}</p>` : '<p class="small soft">None exists yet.</p>'}
+      <div class="row"><button data-do="reload">Check again</button></div>`);
+  }
+  const list = a => a.map(x => `<span class="tag">${esc(x)}</span>`).join('');
+  const body = `<p>${esc(b.summary)}</p><p class="small soft">${esc(b.format)}</p>
+    <h3>Themes</h3>${list(b.themes)}<h3>Tone</h3>${list(b.tone)}
+    <h3>Structure</h3><table><tr><th>Beat</th><th>Time</th><th>What happens</th></tr>${b.structure.map(s =>
+      `<tr><td>${esc(s.beat)}</td><td class="num-cell">${clock(s.start)}–${clock(s.end)}</td><td>${esc(s.what)}</td></tr>`).join('')}</table>
+    <div class="two"><div><h3>Look</h3><p class="small">${esc(b.visual_style.look)}</p><p class="small soft">${esc(b.visual_style.editing)}</p></div>
+      <div><h3>Sound</h3><p class="small">${esc(b.audio_style.voice)}</p><p class="small soft">${esc(b.audio_style.music)}</p></div></div>
+    <h3>Characters</h3>${b.characters.map(c => `<p class="small"><b>${esc(c.id)}</b>: ${esc(c.description)}</p>`).join('') || '<p class="small soft">None recur.</p>'}
+    <div class="two"><div><h3>Keep in any remix</h3><ul class="small">${b.remix_notes.essential.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
+      <div><h3>Risks</h3><ul class="small">${b.remix_notes.risks.map(x => `<li>${esc(x)}</li>`).join('') || '<li>None noted.</li>'}</ul></div></div>
+    <details><summary>All ${b.shots.length} shots</summary><table><tr><th>#</th><th>Time</th><th>Role</th><th>On screen</th><th>Speaker</th></tr>${b.shots.map(s =>
+      `<tr><td>${s.index}</td><td class="num-cell">${clock(s.start)}</td><td>${esc(s.role)}</td><td>${esc(s.description)}</td><td>${esc(s.speaker || '')}</td></tr>`).join('')}</table></details>
+    <div class="row">${P.gates.blueprint ? `<span class="ok">Approved.</span> <button data-do="gate" data-g="blueprint" data-v="0">Undo</button>`
+      : `<button class="primary" data-do="gate" data-g="blueprint" data-v="1">Approve blueprint</button>`}</div>`;
+  return gate(3, 'Blueprint', P.gates.blueprint ? 'done' : 'ready', '', body);
+}
+
+function renderCost() {
+  if (!P.gates.blueprint) return gate(4, 'What each remix would cost', 'locked', 'Approve the blueprint first.', '');
+  const built = o => (o.mode === 'audio remix' && o.name.startsWith('new music, original')) || (o.mode === 'restyle' && o.name.includes('360p'));
+  const body = `<table><tr><th>Mode</th><th>Option</th><th>Estimate</th><th></th></tr>${P.estimate.map(o =>
+      `<tr><td>${esc(o.mode)}</td><td>${esc(o.name)}<div class="small soft">${esc(o.note)}</div></td><td class="num-cell">${money(o.usd)}</td>
+       <td class="small">${o.within_cap ? '' : '<span class="warn">asks first</span> '}${built(o) ? '<span class="ok">available below</span>' : '<span class="soft">not built yet</span>'}</td></tr>`).join('')}</table>
+    <p class="small soft">One pass each, without retakes. Visual modes usually need 1.5 to 2 times as much.</p>`;
+  return gate(4, 'What each remix would cost', 'done', '', body);
+}
+
+function renderMusic() {
+  if (!P.gates.blueprint) return gate(5, 'New music', 'locked', 'Approve the blueprint first.', '');
+  const takes = P.remixes.filter(t => !t.look && (t.track || t.voice || t.mode === 'audio')), approved = takes.some(t => t.approved);
+  const next = 'take-' + (takes.length + 1);
+  const lastPrompt = draft.prompt ?? (takes.length ? takes[0].prompt : P.music_prompt_draft);  // takes come newest first
+  const over = P.music_usd > S.cap, canPay = S.google.ready && !P.busy;
+  let body = `<p>Describe the music. Say "instrumental" to keep vocals out, give a tempo, and lay out the structure with times.</p>
+    <textarea id="prompt" placeholder="Instrumental underscore, felt piano and soft strings, around 100 BPM...">${esc(lastPrompt)}</textarea>
+    <div class="row"><input type="text" id="take" value="${esc(draft.name ?? next)}" style="max-width:220px" aria-label="Name for this take">
+      ${over ? `<label class="small warn"><input type="checkbox" id="overcap"> I approve ${money(P.music_usd)}, which is over my cap</label>` : ''}
+      <button class="primary" data-do="music" ${canPay ? '' : 'disabled'}>Generate music · ${money(P.music_usd)}</button>
+      ${S.google.ready ? '' : '<span class="small warn">Needs Google access.</span>'}</div>`;
+  body += takes.map(t => {
+    const lv = t.levels;
+    return `<div class="take"><div class="head"><b>${esc(t.name)}</b><span class="soft small">${money(t.spent)} spent${t.music_fit ? ' · ' + esc(t.music_fit) : ''}</span>
+        ${t.approved ? chip('done', 'Approved') : ''}</div>
+      ${t.track ? `<audio controls preload="none" src="${media(t.track)}"></audio>` : '<p class="small soft">No track.</p>'}
+      ${t.prompt ? `<details><summary>Prompt</summary><pre>${esc(t.prompt)}</pre></details>` : ''}
+      ${t.notes ? `<details><summary>What the model says it made</summary><pre>${esc(t.notes)}</pre></details>` : ''}
+      ${t.voice ? `<h3>AI voices</h3><audio controls preload="none" src="${media(t.voice)}"></audio>
+        ${t.voice_summary ? `<p class="small soft">${esc(Object.entries(t.voice_summary.voices || {}).map(v => v[0] + ': ' + v[1]).join(', '))} ·
+          ${t.voice_summary.lines} lines, ${t.voice_summary.sped_up} sped up, ${t.voice_summary.overrun} run past their slot
+          ${t.voice_summary.suspect ? `· <span class="warn">${t.voice_summary.suspect} suspiciously long: check before using</span>` : ''}</p>` : ''}` : ''}
+      ${t.output ? `<p class="small soft">The video below uses the <b>${esc(t.voices || 'original')}</b> voices.</p>` : ''}
+      ${t.output ? `<video controls preload="metadata" src="${media(t.output)}"></video>
+        ${lv ? `<table><tr><th>Loudness</th><th>Original</th><th>This remix</th></tr>${Object.keys(lv).map(k =>
+          `<tr><td>${k === 'talking' ? 'While people talk' : 'Last seconds'} <span class="soft small">(${clock(lv[k].start)}, ${lv[k].seconds}s)</span></td>
+           <td class="num-cell">${lv[k].source_dbfs} dB</td><td class="num-cell ${Math.abs(lv[k].source_dbfs - lv[k].remix_dbfs) > 6 ? 'warn' : ''}">${lv[k].remix_dbfs} dB</td></tr>`).join('')}</table>` : ''}` : ''}
+      ${t.output ? (t.check_current ? '<p class="small ok">Script check passed: audio, captions and picture match the script.</p>'
+        : t.check ? `<p class="small err">Script check failed: ${esc(t.check.problems.map(p => (p.line ? 'line ' + p.line + ': ' : '') + p.problem).slice(0, 3).join('; '))}</p>`
+        : '<p class="small warn">Not checked against its script yet. Approval needs a passing check.</p>') : ''}
+      <div class="row">${t.output ? `<button data-do="verify" data-n="${esc(t.name)}" ${P.busy ? 'disabled' : ''}>Check script match</button>` : ''}${t.track ? `<button data-do="mix" data-n="${esc(t.name)}" ${P.busy ? 'disabled' : ''}>${t.output ? 'Mix with original voices' : 'Mix under the video (free)'}</button>
+          ${t.voice ? `<button data-do="mix" data-voices="1" data-n="${esc(t.name)}" ${P.busy ? 'disabled' : ''}>Mix with AI voices (free)</button>` : ''}
+          <button data-do="voices" data-n="${esc(t.name)}" ${S.google.ready && !P.busy ? '' : 'disabled'}>${t.voice ? 'Redo' : 'Generate'} AI voices · ${money(P.voices_usd || 0)}</button>` : ''}
+        ${t.output ? (t.approved ? `<button data-do="approve" data-n="${esc(t.name)}" data-v="0">Undo approval</button>`
+          : `<button class="primary" data-do="approve" data-n="${esc(t.name)}" data-v="1">Approve this remix</button>`) : ''}</div></div>`;
+  }).join('');
+  return gate(5, 'New music', approved ? 'done' : P.busy ? 'running' : 'ready', '', body);
+}
+
+// What a set of shots costs to restyle: the video model bills whole seconds, at least 3 per clip.
+function shotsUsd(list) {
+  const [lo, hi] = P.restyle.clip_seconds;
+  return list.reduce((sum, s) => sum + Math.max(lo * Math.max(1, Math.ceil(s.duration / hi)), Math.ceil(s.duration)), 0) * P.restyle.usd_per_second;
+}
+const shotNumbers = text => [...new Set((String(text).match(/\d+/g) || []).map(Number))];
+const val = (id, fallback) => keep[id] ?? fallback;
+
+function renderRestyle() {
+  if (!P.gates.blueprint) return gate(6, 'New picture', 'locked', 'Approve the blueprint first.', '');
+  if (!['own', 'client'].includes(P.rights)) return gate(6, 'New picture', 'locked', "Restyling redraws the original footage, so the video has to be yours or a client's.", '');
+  const sources = P.remixes.filter(t => t.output && t.mode === 'audio'), looks = P.remixes.filter(t => t.look);
+  const canPay = S.google.ready && !P.busy, pad = n => String(n).padStart(4, '0');
+  let body = `<p>A video model redraws every shot in a new style. The sound comes from one of your mixed takes in step 5, and captions are burned in from that take's script. Drafts are made at ${esc(P.restyle.resolution)}.</p>`;
+
+  body += looks.map(t => {
+    const done = new Set(t.restyled_shots), left = P.shots.filter(s => !done.has(s.index)), finished = !left.length && t.output;
+    const pilotDefault = left.slice(0, 3).map(s => s.index).join(', ');
+    const picked = shotNumbers(val('rs-shots-' + t.name, pilotDefault)), pickedShots = P.shots.filter(s => picked.includes(s.index) && !done.has(s.index));
+    const restUsd = shotsUsd(left), over = restUsd > S.cap, piloted = t.restyled_shots.length >= 2;
+    const failed = Object.keys(t.failed || {});
+    return `<div class="take"><div class="head"><b>${esc(t.name)}</b><span class="soft small">${money(t.spent)} spent · sound from ${esc(t.look.audio_from || t.audio_from || '?')}</span>
+        ${t.approved ? chip('done', 'Approved') : finished ? '' : chip('', t.restyled_shots.length ? 'Pilot' : 'Not started')}</div>
+      <p class="small">${esc(t.look.style)}</p>
+      <p class="small soft">${t.restyled_shots.length} of ${P.shots.length} shots restyled${failed.length ? ` · <span class="warn">the last run failed on shots ${esc(failed.join(', '))}; run again to retry them</span>` : ''}</p>
+      ${left.length ? `<div class="row"><input type="text" class="rs-shots" data-keep id="rs-shots-${esc(t.name)}" value="${esc(val('rs-shots-' + t.name, pilotDefault))}" style="max-width:160px" aria-label="Shots to pilot">
+          <button data-do="restyle" data-pilot="1" data-n="${esc(t.name)}" ${canPay ? '' : 'disabled'}>Pilot these shots · ${money(shotsUsd(pickedShots))}</button>
+          <span class="small soft">Shot numbers are on the contact sheets in step 2.</span></div>
+        <div class="row">${piloted ? `${over ? `<label class="small warn"><input type="checkbox" data-keep id="rs-over-${esc(t.name)}" ${val('rs-over-' + t.name, false) ? 'checked' : ''}> I approve ${money(restUsd)}, which is over my cap</label>` : ''}
+          <button class="primary" data-do="restyle" data-n="${esc(t.name)}" ${canPay ? '' : 'disabled'}>Restyle the other ${left.length} shots · ${money(restUsd)}</button>`
+          : `<span class="small soft">Pilot 2 or 3 shots and look at them before running all ${P.shots.length} (${money(restUsd)}).</span>`}
+          ${S.google.ready ? '' : '<span class="small warn">Needs Google access.</span>'}</div>` : ''}
+      ${t.restyled_shots.length ? `<details ${finished ? '' : 'open'}><summary>Restyled shots next to the original (${t.restyled_shots.length})</summary>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px">${t.restyled_shots.map(n =>
+          `<div><div class="small soft">shot ${n}</div><div style="display:flex;gap:4px">
+             <video controls muted loop preload="none" style="width:50%" src="${media('remixes/' + t.name + '/shots/' + pad(n) + '_source.mp4')}"></video>
+             <video controls muted loop preload="none" style="width:50%" src="${media('remixes/' + t.name + '/shots/' + pad(n) + '_restyled.mp4')}"></video></div></div>`).join('')}</div></details>` : ''}
+      ${finished ? `<video controls preload="metadata" src="${media(t.output)}"></video>
+        ${t.check_current ? '<p class="small ok">Script and sync check passed: sound, captions and picture match the script.</p>'
+          : t.check ? `<p class="small err">Check not passed: ${esc(t.check.problems.map(p => (p.line ? 'line ' + p.line + ': ' : '') + p.problem).slice(0, 3).join('; '))}</p>`
+          : '<p class="small warn">Not checked against its script yet. Approval needs a passing check.</p>'}
+        ${t.check && t.check.measured && t.check.measured.voice_offset_seconds !== undefined ? `<p class="small soft">Voices measured ${t.check.measured.voice_offset_seconds >= 0 ? '+' : ''}${Number(t.check.measured.voice_offset_seconds).toFixed(2)} s from the picture.</p>` : ''}
+        ${t.check_sheets.length ? `<details><summary>Frame sheets: one frame per spoken line, with the caption that should be showing (${t.check_sheets.length})</summary>${t.check_sheets.map(f => `<img class="sheet" loading="lazy" src="${media(f)}">`).join('')}</details>` : ''}
+        <div class="row"><button data-do="verify" data-n="${esc(t.name)}" ${P.busy ? 'disabled' : ''}>Check script match</button>
+          ${t.check_sheets.length && !t.check_current ? `<button data-do="frames" data-n="${esc(t.name)}" ${P.busy ? 'disabled' : ''}>I looked at the frame sheets and they match</button>` : ''}
+          ${t.approved ? `<button data-do="approve" data-n="${esc(t.name)}" data-v="0">Undo approval</button>`
+            : `<button class="primary" data-do="approve" data-n="${esc(t.name)}" data-v="1">Approve this remix</button>`}</div>` : ''}
+      <p class="small soft">To fix one shot, tell Claude what it should show, for example: In ${esc(t.name)}, shot 26 should show a film camera instead of the potter.</p></div>`;
+  }).join('');
+
+  if (!sources.length) body += '<p class="small warn">Mix a take in step 5 first: its sound goes under the new picture.</p>';
+  else {
+    const chars = (P.blueprint && P.blueprint.characters) || [];
+    body += `<details ${looks.length ? '' : 'open'}><summary>${looks.length ? 'Start another restyle' : 'Describe the new look'}</summary>
+      <p class="small soft">Say what the whole video should look like, then how each character should look. Saving is free; nothing is generated until you pilot shots.</p>
+      <textarea data-keep id="rs-style" placeholder="Restyle this video as stop-motion claymation: hand-sculpted clay characters and a clay set with soft, warm studio lighting.">${esc(val('rs-style', ''))}</textarea>
+      ${chars.map(c => `<h3>${esc(c.id)}</h3><textarea data-keep data-char="${esc(c.id)}" id="rs-char-${esc(c.id)}" style="min-height:54px">${esc(val('rs-char-' + c.id, c.description))}</textarea>`).join('')}
+      <div class="row"><input type="text" data-keep id="rs-name" value="${esc(val('rs-name', 'restyle-' + (looks.length + 1)))}" style="max-width:220px" aria-label="Name for this restyle">
+        <label class="small soft">Sound from <select data-keep id="rs-audio">${sources.map(t => `<option value="${esc(t.name)}" ${val('rs-audio', sources[0].name) === t.name ? 'selected' : ''}>${esc(t.name)} (${esc(t.voices || 'original')} voices)</option>`).join('')}</select></label>
+        <button data-do="look" ${P.busy ? 'disabled' : ''}>Save this look (free)</button></div></details>`;
+  }
+  return gate(6, 'New picture', looks.some(t => t.approved) ? 'done' : P.busy ? 'running' : 'ready', '', body);
+}
+
+function renderSpend() {
+  const rows = S.by_remix.map(r => `<tr><td>${esc(r[0])}</td><td class="num-cell">${money(r[1])}</td><td class="num-cell">${r[2]}</td></tr>`).join('');
+  const days = S.by_day.map(r => `<tr><td>${esc(r[0])}</td><td class="num-cell">${money(r[1])}</td><td class="num-cell">${r[2]}</td></tr>`).join('');
+  return gate(7, 'Spend', 'done', '', `<div class="two"><div><table><tr><th>Remix</th><th>Spent</th><th>Calls</th></tr>${rows || '<tr><td class="soft">Nothing yet</td><td></td><td></td></tr>'}</table></div>
+    <div><table><tr><th>Day</th><th>Spent</th><th>Calls</th></tr>${days}</table></div></div>`);
+}
+
+function render() {
+  const active = document.activeElement;
+  const hold = active && (['prompt', 'take'].includes(active.id) || active.dataset.keep !== undefined);
+  if ($('prompt')) draft = {prompt: $('prompt').value, name: $('take').value};
+  document.querySelectorAll('[data-keep]').forEach(el => { keep[el.id] = el.type === 'checkbox' ? el.checked : el.value; });  // what was typed survives a redraw
+  renderSide();
+  if (hold) return;  // do not redraw the form under someone who is typing in it
+  $('main').innerHTML = P ? `<h1>${esc(P.name)}</h1>` + renderRights() + renderDecompose() + renderBlueprint() + renderCost() + renderMusic() + renderRestyle() + renderSpend()
+    : '<h1>No videos yet</h1><p class="soft">Drop a video on the left to start.</p>';
+}
+
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-do]'); if (!b) return;
+  const d = b.dataset, base = '/api/project/' + encodeURIComponent(slug) + '/';
+  if (d.do === 'pick') { slug = d.slug; localStorage.setItem('remix.slug', slug); draft = {}; keep = {}; await refresh(); }
+  else if (d.do === 'look') {
+    const body = {name: $('rs-name').value, audio_from: $('rs-audio').value, style: $('rs-style').value,
+      characters: Object.fromEntries([...document.querySelectorAll('[data-char]')].map(el => [el.dataset.char, el.value]))};
+    try { await api(base + 'look', body); keep = {}; document.querySelectorAll('[data-keep]').forEach(el => el.removeAttribute('data-keep')); toast('Look saved. Pilot two or three shots next.'); }
+    catch (err) { toast(err.message, true); }
+    await refresh();
+  }
+  else if (d.do === 'restyle') {
+    const box = $('rs-over-' + d.n), shots = d.pilot ? shotNumbers($('rs-shots-' + d.n).value) : [];
+    if (d.pilot && !shots.length) { toast('Type the shot numbers to pilot, such as 2, 3, 4.', true); return; }
+    await act(base + 'restyle', {name: d.n, shots, approve_over_cap: box ? box.checked : false}, 'Restyling. This is a paid step; each shot takes a minute or two.');
+  }
+  else if (d.do === 'frames') await act(base + 'frames', {name: d.n}, 'Checking again with the frames confirmed. This takes a few minutes.');
+  else if (d.do === 'reload') await refresh();
+  else if (d.do === 'rights') await act(base + 'rights', {status: d.v});
+  else if (d.do === 'decompose') await act(base + 'decompose', {}, 'Taking the video apart. This takes a few minutes.');
+  else if (d.do === 'gate') await act(base + 'gate', {gate: d.g, approved: d.v === '1'});
+  else if (d.do === 'mix') await act(base + 'mix', {name: d.n, voices: d.voices === '1'}, 'Mixing.');
+  else if (d.do === 'verify') await act(base + 'verify', {name: d.n}, 'Checking the video against its script. This takes a couple of minutes.');
+  else if (d.do === 'voices') await act(base + 'voices', {name: d.n}, 'Generating voices. This is a paid step and takes a minute or two.');
+  else if (d.do === 'approve') await act(base + 'approve', {name: d.n, approved: d.v === '1'});
+  else if (d.do === 'music') {
+    const body = {name: $('take').value, prompt: $('prompt').value, approve_over_cap: $('overcap') ? $('overcap').checked : false};
+    draft = {};
+    await act(base + 'music', body, 'Generating music. This is a paid step and takes about a minute.');
+  }
+});
+
+async function upload(file) {
+  if (!file) return;
+  toast('Uploading ' + file.name + '...');
+  try {
+    const r = await fetch('/api/upload?name=' + encodeURIComponent(file.name), {method: 'POST', headers: {'X-Remix': '1'}, body: file});
+    const data = await r.json(); if (!r.ok) throw new Error(data.error);
+    slug = data.slug; localStorage.setItem('remix.slug', slug); toast('Uploaded. Taking it apart now.');
+  } catch (e) { toast(e.message, true); }
+  await refresh();
+}
+document.addEventListener('input', e => {  // the pilot button always carries the price of the shots typed next to it
+  if (!e.target.classList.contains('rs-shots')) return;
+  const name = e.target.id.slice('rs-shots-'.length), take = P.remixes.find(t => t.name === name), picked = shotNumbers(e.target.value);
+  const button = e.target.parentElement.querySelector('[data-pilot]');
+  if (take && button) button.textContent = 'Pilot these shots · ' + money(shotsUsd(P.shots.filter(s => picked.includes(s.index) && !take.restyled_shots.includes(s.index))));
+});
+$('file').addEventListener('change', e => upload(e.target.files[0]));
+const drop = $('drop');
+['dragenter', 'dragover'].forEach(n => drop.addEventListener(n, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(n => drop.addEventListener(n, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => upload(e.dataTransfer.files[0]));
+refresh();
+</script>
+</body>
+</html>

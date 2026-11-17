@@ -1,0 +1,61 @@
+# syntax=docker/dockerfile:1
+# NVIDIA GPU variant of ./Dockerfile: the same image with the CUDA build of PyTorch, so Demucs and
+# faster-whisper run on the GPU. Build and run it through the compose override:
+#   docker compose -f compose.yaml -f compose.gpu.yaml build
+#   docker compose -f compose.yaml -f compose.gpu.yaml run --rm remix decompose inbox/<file>
+# The steps down to WORKDIR /app match ./Dockerfile line for line, so both images share those layers.
+FROM python:3.12-slim-trixie
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_ROOT_USER_ACTION=ignore
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# CUDA 12.1 build of PyTorch, from the PyTorch index (about 2.8 GB of wheels). It brings the NVIDIA
+# libraries as pip packages, cuBLAS 12 and cuDNN 9 among them, so no nvidia/cuda base image is
+# needed: the host supplies only the driver, through the NVIDIA container runtime.
+# torch stays on 2.5.x: Demucs 4.0.1 checkpoints need the pre-2.6 torch.load default.
+# pip cannot resume a download, and on a slow link a connection can break partway through one of
+# the 400-800 MB wheels. Each retry keeps the wheels that already finished (they are in the pip cache).
+RUN --mount=type=cache,target=/root/.cache/pip \
+    for attempt in 1 2 3 4 5; do \
+        pip install --timeout 120 --index-url https://download.pytorch.org/whl/cu121 \
+            torch==2.5.1 torchaudio==2.5.1 && exit 0; \
+        echo "pip attempt $attempt of 5 failed; finished downloads stay in the pip cache"; \
+    done; \
+    exit 1
+
+COPY requirements.txt ./
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
+
+# CTranslate2 (under faster-whisper) loads libcublas.so.12 by name at run time, so the pip-installed
+# NVIDIA libraries have to be on the loader path. CTranslate2 4.6.3 and later no longer use cuDNN;
+# the cuDNN 9 directory is listed for the 4.5 to 4.6.2 wheels that requirements.txt also allows.
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib
+
+# Fail the build, rather than the first GPU run, if those libraries are not where LD_LIBRARY_PATH
+# says or if requirements.txt replaced the CUDA build of PyTorch. The two checks run in separate
+# processes because importing torch would load the libraries by its own route.
+RUN python -c "import ctypes; ctypes.CDLL('libcublas.so.12'); ctypes.CDLL('libcudnn.so.9')" \
+ && python -c "import torch; assert torch.version.cuda, 'PyTorch is not a CUDA build'; print('torch', torch.__version__, 'built for CUDA', torch.version.cuda)"
+
+COPY pyproject.toml ./
+COPY src ./src
+COPY tests ./tests
+RUN pip install --no-deps -e .
+
+# Model weights download on first use into /models (a named volume in compose.yaml).
+ENV REMIX_DATA=/data \
+    HF_HOME=/models/hf \
+    TORCH_HOME=/models/torch \
+    HF_HUB_DISABLE_TELEMETRY=1
+
+WORKDIR /data
+ENTRYPOINT ["remix"]

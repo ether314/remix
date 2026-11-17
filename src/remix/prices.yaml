@@ -1,0 +1,71 @@
+# Provider prices used for estimates and for pricing ledger entries.
+#
+# Every price names the page it was read from. `from` / `until` bound the dates it applies
+# (inclusive). To change a price, close the old entry with `until` and add a new one with `from`,
+# so past work can still be re-costed at the price that applied.
+
+sources:
+  agent-platform:
+    url: https://cloud.google.com/model-garden/pricing
+    read: 2026-11-17
+    note: Client-rendered page; read it in a real browser.
+  ai-studio:
+    url: https://aistudio.google.com/docs/pricing
+    read: 2026-11-17
+    note: Gemini API list prices. Agent Platform may differ; not confirmed there.
+
+prices:
+  # Music: billed per generation.
+  - {id: lyria-3-pro.song, provider: google, model: lyria-3-pro-preview, unit: song, usd: 0.08, source: agent-platform}
+  - {id: lyria-3-clip.clip, provider: google, model: lyria-3-clip-preview, unit: 30 s clip, usd: 0.04, source: agent-platform}
+
+  # Speech: billed per token; output audio is 25 tokens per second. Prices double in 2027.
+  - {id: flash-tts.audio-out, provider: google, model: gemini-3.8-flash-tts, unit: 1M tokens, usd: 9.00, until: 2026-12-31, source: agent-platform}
+  - {id: flash-tts.audio-out, provider: google, model: gemini-3.8-flash-tts, unit: 1M tokens, usd: 18.00, from: 2027-01-01, source: agent-platform}
+  - {id: flash-tts.text-in, provider: google, model: gemini-3.8-flash-tts, unit: 1M tokens, usd: 0.50, until: 2026-12-31, source: agent-platform}
+  - {id: flash-tts.text-in, provider: google, model: gemini-3.8-flash-tts, unit: 1M tokens, usd: 1.00, from: 2027-01-01, source: agent-platform}
+  - {id: flash-lite-tts.audio-out, provider: google, model: gemini-3.8-flash-lite-tts, unit: 1M tokens, usd: 6.00, until: 2026-12-31, source: agent-platform}
+  - {id: flash-lite-tts.audio-out, provider: google, model: gemini-3.8-flash-lite-tts, unit: 1M tokens, usd: 12.00, from: 2027-01-01, source: agent-platform}
+  - {id: flash-lite-tts.text-in, provider: google, model: gemini-3.8-flash-lite-tts, unit: 1M tokens, usd: 0.50, until: 2026-12-31, source: agent-platform}
+  - {id: flash-lite-tts.text-in, provider: google, model: gemini-3.8-flash-lite-tts, unit: 1M tokens, usd: 1.00, from: 2027-01-01, source: agent-platform}
+
+  # Video, Gemini Omni: billed per token for what goes in and what comes out.
+  - {id: omni-1.2-flash.video-out, provider: google, model: gemini-omni-1.2-flash, unit: 1M tokens, usd: 12.00, source: agent-platform}
+  - {id: omni-1.2-flash.input, provider: google, model: gemini-omni-1.2-flash, unit: 1M tokens, usd: 1.50, source: agent-platform}
+
+  # Video, Veo 3.1: billed per second of output. "video" is silent, "video-audio" has generated sound.
+  - {id: veo-3.1.video.720p, provider: google, model: veo-3.1-generate-001, unit: second, usd: 0.20, source: agent-platform}
+  - {id: veo-3.1.video.1080p, provider: google, model: veo-3.1-generate-001, unit: second, usd: 0.20, source: agent-platform}
+  - {id: veo-3.1.video.4k, provider: google, model: veo-3.1-generate-001, unit: second, usd: 0.40, source: agent-platform}
+  - {id: veo-3.1.video-audio.720p, provider: google, model: veo-3.1-generate-001, unit: second, usd: 0.40, source: agent-platform}
+  - {id: veo-3.1.video-audio.1080p, provider: google, model: veo-3.1-generate-001, unit: second, usd: 0.40, source: agent-platform}
+  - {id: veo-3.1.video-audio.4k, provider: google, model: veo-3.1-generate-001, unit: second, usd: 0.60, source: agent-platform}
+  - {id: veo-3.1-fast.video.720p, provider: google, model: veo-3.1-fast-generate-001, unit: second, usd: 0.08, source: agent-platform}
+  - {id: veo-3.1-fast.video.1080p, provider: google, model: veo-3.1-fast-generate-001, unit: second, usd: 0.10, source: agent-platform}
+  - {id: veo-3.1-fast.video.4k, provider: google, model: veo-3.1-fast-generate-001, unit: second, usd: 0.25, source: agent-platform}
+  - {id: veo-3.1-fast.video-audio.720p, provider: google, model: veo-3.1-fast-generate-001, unit: second, usd: 0.10, source: agent-platform}
+  - {id: veo-3.1-fast.video-audio.1080p, provider: google, model: veo-3.1-fast-generate-001, unit: second, usd: 0.12, source: agent-platform}
+  - {id: veo-3.1-fast.video-audio.4k, provider: google, model: veo-3.1-fast-generate-001, unit: second, usd: 0.30, source: agent-platform}
+  - {id: veo-3.1-lite.video.720p, provider: google, model: veo-3.1-lite-generate-001, unit: second, usd: 0.03, source: agent-platform}
+  - {id: veo-3.1-lite.video.1080p, provider: google, model: veo-3.1-lite-generate-001, unit: second, usd: 0.05, source: agent-platform}
+  - {id: veo-3.1-lite.video-audio.720p, provider: google, model: veo-3.1-lite-generate-001, unit: second, usd: 0.05, source: agent-platform}
+  - {id: veo-3.1-lite.video-audio.1080p, provider: google, model: veo-3.1-lite-generate-001, unit: second, usd: 0.08, source: agent-platform}
+
+  # Keyframe images for regeneration.
+  - {id: nano-banana-2.1.image.1k, provider: google, model: gemini-nano-banana-2.1, unit: image, usd: 0.0336, source: ai-studio}
+  - {id: nano-banana-2.1.image.2k, provider: google, model: gemini-nano-banana-2.1, unit: image, usd: 0.0504, source: ai-studio}
+  - {id: nano-banana-2.1.image.4k, provider: google, model: gemini-nano-banana-2.1, unit: image, usd: 0.113, source: ai-studio}
+
+# Tokens per second unless noted. Omni figures are from the footnotes under its price table.
+rates:
+  tts.audio-out: 25
+  omni.video-out: {360p: 1931, 720p: 5792, 1080p: 8688, 4k: 17376}
+  omni.video-in-max: 5792
+  omni.audio-in: 32
+  omni.image-in: 1120   # tokens per image
+
+# Model limits that change how much has to be generated.
+limits:
+  lyria-3-pro.max-seconds: 184
+  omni.clip-seconds: [3, 15]      # shortest and longest clip per request
+  veo-3.1.clip-seconds: [4, 6, 8] # allowed clip lengths
