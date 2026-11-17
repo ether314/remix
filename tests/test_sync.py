@@ -259,6 +259,7 @@ def test_each_shot_prompt_names_the_speaker_the_seconds_and_who_stays_silent():
     both = restyle.shot_prompt(look, shot, ["dave", "mantis"], heard, ("dave", "mantis"))
     assert 'From 0.0 to 1.0 seconds the grasshopper says: "Where does that road end?"' in both
     assert 'From 2.0 to 3.5 seconds Dave says: "Nowhere."' in both and "Only the grasshopper and Dave moves a mouth" in both
+    assert "Dave is clearly TALKING" in both and "never holds a fixed smile" in both  # a speaker must visibly talk for the whole line
     only_dave = restyle.shot_prompt(look, shot, ["dave"], heard[:1], ("dave", "mantis"))
     assert "the grasshopper is heard from off screen" in only_dave and "Nobody on screen speaks" in only_dave
     assert "Dave does not speak in this shot and only listens, mouth closed." in only_dave

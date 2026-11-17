@@ -167,10 +167,14 @@ def shot_prompt(look: dict, shot: dict, present: list[str], heard: list[dict], v
         who = names.get(line["speaker"], line["speaker"])
         if line["speaker"] in present:
             talking.append(line["speaker"])
-            # Naming the seconds alone gave a mouth that moved for the first words and then froze in a smile.
+            # Naming the seconds alone gave a mouth that moved for the first words and then froze in a smile,
+            # and "keeps opening and closing" was still too gentle for a close-up. Saying outright that the
+            # character is talking, how fast, and that a fixed smile is wrong is what made the mouth move
+            # through the whole line.
             parts.append(
                 f'From {line["from"]} to {line["to"]} seconds {who} says: "{line["text"]}" '
-                f"For that whole span, from its first moment to its last, {who}'s mouth keeps opening and closing as in speech."
+                f"For that whole span, from its first moment to its last, {who} is clearly TALKING: {who}'s mouth opens wide "
+                "and closes again and again, several times a second, and never holds a fixed smile."
             )
         else:
             parts.append(f'From {line["from"]} to {line["to"]} seconds {who} is heard from off screen saying: "{line["text"]}"')
