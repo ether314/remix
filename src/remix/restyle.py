@@ -327,7 +327,18 @@ def full(
         raise RestyleError(f"the new picture has {made} frames where the shots add up to {expected}; it would drift out of sync")
     voices.write_captions(project, name)
     sound = (project.root / "remixes" / slugify(audio_from) / "output.mp4").resolve()
-    _run(["-i", "picture.mp4", "-i", str(sound), "-vf", "subtitles=captions.ass", "-map", "0:v:0", "-map", "1:a:0",
+    burn = "subtitles=captions.ass"
+    credit = look.get("end_credit")
+    if credit and str(credit.get("text", "")).strip():
+        # A signature or credit: real text, so it is spelled exactly, faded in over the video's last moments.
+        text = "".join(c for c in str(credit["text"]) if c.isalnum() or c in " .,-!?&")
+        begin = max(expected / FPS - float(credit.get("seconds", 1.2)), 0.0)
+        burn += (
+            f",drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='{text}':fontcolor=white"
+            f":fontsize=h*{float(credit.get('size', 0.028)):.3f}:x=(w-text_w)/2:y=h*{float(credit.get('height', 0.72)):.2f}"
+            f":alpha='0.85*min(max((t-{begin:.2f})/0.4,0),1)':enable='gte(t,{begin:.2f})'"
+        )
+    _run(["-i", "picture.mp4", "-i", str(sound), "-vf", burn, "-map", "0:v:0", "-map", "1:a:0",
           "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
           "-shortest", "output.mp4"], cwd=folder)
     record = {
