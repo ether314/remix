@@ -10,7 +10,7 @@ from typing import Optional
 
 import typer
 
-from . import __version__, config, cost, dialogue, google, overview, remixes, restyle, verify, voices
+from . import __version__, config, cost, dialogue, google, mouths, overview, remixes, restyle, verify, voices
 from . import blueprint as bp
 from .media import MediaError
 from .project import RIGHTS, Project, ProjectError, find, ingest, list_projects, resolve_file, slugify
@@ -493,6 +493,7 @@ def restyle_cmd(
     yes: bool = typer.Option(False, "--yes", help="Run even if the estimate is above the auto-run cap."),
     workers: int = typer.Option(3, help="Shots sent to the model at once. The sign-in token lasts an hour, so long videos need more."),
     defer_check: bool = typer.Option(False, "--defer-check", help="Do not run the check now. The video stays unverified until `remix verify` passes."),
+    no_mouth_check: bool = typer.Option(False, "--no-mouth-check", help="Skip the automatic check of whose mouth moves in each new shot."),
 ) -> None:
     """Restyle every shot of a video, add the remix's audio, and burn in its captions (paid)."""
     project = _project(target)
@@ -506,7 +507,8 @@ def restyle_cmd(
         if not dry_run and not cost.within_cap(planned) and not yes:
             typer.echo(f"error: that is above the ${config.CAP_USD:g} auto-run cap; pass --yes to run it", err=True)
             raise typer.Exit(1)
-        record = restyle.full(project, name, audio_from, resolution, workers=workers, dry_run=dry_run, only=chosen)
+        record = restyle.full(project, name, audio_from, resolution, workers=workers, dry_run=dry_run, only=chosen,
+                              mouth_check=not no_mouth_check)
     except (ProjectError, restyle.RestyleError, google.GoogleError, MediaError, FileNotFoundError, ValueError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1)
@@ -516,6 +518,9 @@ def restyle_cmd(
         typer.echo(f"  shot {number} kept its original picture: {why[:140]}")
     if record.get("regenerated_for_script"):
         typer.echo(f"  regenerated because their line or their correction in look.json changed: shots {record['regenerated_for_script']}")
+    if record.get("mouth_failed"):
+        for number, why in record["mouth_failed"].items():
+            typer.echo(f"  shot {number} still fails the mouth check after retakes: {why[0]}")
     if record.get("pending"):
         # A pilot: most of the picture is still the source, so there is no finished video to check yet.
         typer.echo(f"  {_count(len(record['pending']), 'shot')} still show the original picture: this is a pilot, not checked or approvable yet")
@@ -525,6 +530,29 @@ def restyle_cmd(
         raise typer.Exit(UNVERIFIED)
     if not dry_run and not _check(project, name):
         raise typer.Exit(UNVERIFIED)
+
+
+@app.command("mouths")
+def mouths_cmd(
+    target: str = typer.Argument(..., help="Project slug or a unique prefix of it."),
+    name: str = typer.Option(..., help="Short name of the remix."),
+    only: str = typer.Option("", help="Check just these shots, such as 5,20."),
+    force: bool = typer.Option(False, "--force", help="Check again even where a result is kept."),
+) -> None:
+    """Show each restyled shot to Gemini and check the right character's mouth moves, and only theirs (paid, cents)."""
+    project = _project(target)
+    try:
+        chosen = tuple(int(n) for n in only.replace(" ", "").split(",") if n) or None
+        result = mouths.check(project, name, chosen, force=force)
+    except (voices.VoiceError, google.GoogleError, FileNotFoundError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"{_count(result['checked'], 'shot')} checked ({result['watched']} watched by the model), ${result['usd']:.4f}")
+    for number, why in result["failed"].items():
+        typer.echo(f"  shot {number}: " + "; ".join(why))
+    if result["failed"]:
+        raise typer.Exit(1)
+    typer.echo("every checked shot has the right mouth moving")
 
 
 @app.command("restyle-pilot")

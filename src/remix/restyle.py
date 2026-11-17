@@ -203,6 +203,7 @@ def _run(args: list[str], cwd: Path | None = None) -> None:
 def full(
     project: Project, name: str, audio_from: str | None = None, resolution: str = "360p", workers: int = 3,
     dry_run: bool = False, edit=google.edit_video, only: tuple[int, ...] | None = None,
+    mouth_check: bool = False, watch=None, retakes: int = 2,
 ) -> dict:
     """Restyle every shot, put the remix's audio under the new picture, and burn in its captions.
 
@@ -259,6 +260,12 @@ def full(
         clip = project.root / look["reference_clip"]
         references = [_frame(clip, audio_seconds(clip) / 2, folder / "reference.jpg").read_bytes()]
     table, today, lock, failures, spent = cost.load_table(), date.today(), threading.Lock(), {}, []
+    plans, talkers, mouth_failed = {}, set(), {}
+    if mouth_check and not dry_run:
+        from . import dialogue, mouths
+
+        whole = dialogue.plan(project, name)
+        plans, talkers = {s["index"]: s for s in whole["shots"]}, set(whole["voices"])
 
     def work(shot: dict) -> Path:
         number, seconds = shot["index"], shot["duration"]
@@ -291,11 +298,8 @@ def full(
             speakers = tuple(dict.fromkeys(line["speaker"] for line in lines))
             prompt = shot_prompt(look, described, present, heard_in(shot, heard_lines, stretch), speakers)
             (clips / f"{number:04d}_prompt.txt").write_text(prompt, encoding="utf-8")
-            try:
-                video, usage = edit(source.read_bytes(), prompt, resolution, references)
-                restyled.write_bytes(video)
-                note.write_text(spoken, encoding="utf-8")
-                asked.write_text(correction, encoding="utf-8")
+            def make(text: str) -> bytes:
+                video, usage = edit(source.read_bytes(), text, resolution, references)
                 with lock:
                     for line in (
                         table.line(f"video at {resolution}", "omni-1.2-flash.video-out", usage.get("total_output_tokens", 0), today),
@@ -303,13 +307,46 @@ def full(
                     ):
                         cost.record(project.slug, folder.name, line, note=f"restyle shot {number}")
                         spent.append(line.usd)
+                return video
+
+            try:
+                restyled.write_bytes(make(prompt))
+                note.write_text(spoken, encoding="utf-8")
+                asked.write_text(correction, encoding="utf-8")
+                if mouth_check and number in plans:
+                    # Whose mouth moves is checked on every new take. A take that fails is made again with
+                    # what was wrong said plainly; the take with the fewest faults is kept.
+                    best = mouths.check_clip(project, name, plans[number], look, talkers, restyled, watch)
+                    for attempt in range(1, retakes + 1):
+                        if best["ok"]:
+                            break
+                        kept = restyled.read_bytes()
+                        again = f"{prompt} The last attempt at this shot was wrong: {'; '.join(best['problems'])}. Fix exactly that."
+                        restyled.write_bytes(make(again))
+                        trial = mouths.check_clip(project, name, plans[number], look, talkers, restyled, watch)
+                        if len(trial["problems"]) < len(best["problems"]) or trial["ok"]:
+                            best = trial
+                        else:
+                            restyled.write_bytes(kept)
+                            mouths.record_path(restyled).write_text(json.dumps(best, indent=2), encoding="utf-8")
+                    if not best["ok"]:
+                        with lock:
+                            mouth_failed[number] = best["problems"]
             except google.GoogleError as exc:
                 with lock:
                     failures[number] = str(exc)[:200]
         picture = restyled if restyled.is_file() else source
         frames = max(round(shot["end"] * FPS) - round(shot["start"] * FPS), 1)
-        factor = (frames / FPS) / audio_seconds(picture)
-        _run(["-i", str(picture), "-an",
+        length, trim = audio_seconds(picture), []
+        # The video model sometimes ends a clip on a flash of the next scene. The mouth check says where it
+        # starts; the clip is cut just before it, so the flash never reaches the video.
+        record = clips / f"{number:04d}_mouths.json"
+        if picture == restyled and record.is_file() and record.stat().st_mtime >= restyled.stat().st_mtime:
+            cut = json.loads(record.read_text(encoding="utf-8")).get("trim_to")
+            if cut and cut < length:
+                length, trim = cut, ["-t", f"{cut:.3f}"]
+        factor = (frames / FPS) / length
+        _run([*trim, "-i", str(picture), "-an",
               "-vf", f"setpts=PTS*{factor:.6f},fps={FPS},tpad=stop_mode=clone:stop_duration=1,scale={width}:{height},setsar=1",
               "-frames:v", str(frames), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(final)])
         return final
@@ -344,7 +381,7 @@ def full(
     record = {
         "name": folder.name, "mode": "restyle", "voices": "new", "resolution": resolution, "output": project.rel(folder / "output.mp4"),
         "shots": len(shots), "restyled": sum(1 for s in shots if (clips / f"{s['index']:04d}_restyled.mp4").is_file()),
-        "failed": failures, "usd_this_run": round(sum(spent), 4), "audio_from": slugify(audio_from), "dry_run": dry_run,
+        "failed": failures, "mouth_failed": {str(k): v for k, v in sorted(mouth_failed.items())}, "usd_this_run": round(sum(spent), 4), "audio_from": slugify(audio_from), "dry_run": dry_run,
         "duration": audio_seconds(folder / "output.mp4"),
         "script": voices.script_hash(lines), "fps": FPS, "frames": expected, "regenerated_for_script": sorted(stale),
         # Shots that still show the source picture. While any are left this is a pilot, not a finished remix.

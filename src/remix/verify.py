@@ -427,6 +427,10 @@ def run(project: Project, name: str, frames_ok: bool = False, listen=listen, off
         from . import dialogue
 
         gate = [{"problem": "dialogue gate: " + item} for item in dialogue.problems(project, name, ("script", "picture"))]
+        if record.get("mode") == "restyle" and not record.get("dry_run") and (folder / "look.json").is_file():
+            from . import mouths
+
+            gate += [{"problem": "mouth check: " + item} for item in mouths.problems(project, name)]
     problems = (
         script_problems(project, folder, record, lines)
         + timing

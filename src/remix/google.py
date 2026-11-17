@@ -6,6 +6,7 @@ no Google credentials are ever stored in the image or the project folder.
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
 import time
@@ -58,6 +59,8 @@ def _call(url: str, token: str, body: dict | None = None, timeout: int = 600) ->
         raise GoogleError(f"Google returned HTTP {exc.code}: {detail}") from None
     except urllib.error.URLError as exc:
         raise GoogleError(f"could not reach Google: {exc.reason}") from None
+    except (http.client.HTTPException, ConnectionError, TimeoutError) as exc:  # the connection dropped mid-answer
+        raise GoogleError(f"could not reach Google: {type(exc).__name__}: {exc}") from None
 
 
 def parse_speech(reply: dict) -> tuple[bytes, dict]:
@@ -127,13 +130,62 @@ def edit_video(
             reply = _call(f"{API}/projects/{project}/locations/global/interactions", token, body, timeout=900)
             break
         except GoogleError as exc:
-            if attempt == 3 or not any(code in str(exc) for code in ("HTTP 429", "HTTP 500", "HTTP 503")):
+            if attempt == 3 or not any(code in str(exc) for code in ("HTTP 429", "HTTP 500", "HTTP 503", "reach")):
                 raise
             time.sleep(20 * (attempt + 1))
     for part in _parts(reply):
         if part.get("type") == "video" and part.get("data"):
             return base64.b64decode(part["data"]), reply.get("usage") or {}
     raise GoogleError(f"no video in Google's reply (status {reply.get('status')!r}): {json.dumps(reply)[:500]}")
+
+
+VISION_MODEL = "gemini-3.8-flash"  # reads a clip and answers in JSON; billed per token (see prices.yaml)
+
+
+def watch_video(video: bytes, prompt: str, schema: dict, model: str = VISION_MODEL, fps: int = 10) -> tuple[dict, dict]:
+    """Show a short clip to Gemini and get a JSON answer shaped by `schema`. Returns (answer, token usage).
+
+    The clip is sampled at `fps` frames a second (the default of 1 misses a mouth that opens and closes).
+    """
+    token, project = settings()
+    url = f"{TTS_API}/projects/{project}/locations/global/publishers/google/models/{model}:generateContent"
+    clip = {"inlineData": {"mimeType": "video/mp4", "data": base64.b64encode(video).decode()}}
+    last = None
+    for sampled in (True, False):  # fall back to the default sampling if the model rejects the setting
+        part = {**clip, "videoMetadata": {"fps": fps}} if sampled else clip
+        body = {
+            "contents": [{"role": "user", "parts": [part, {"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json", "responseSchema": schema, "temperature": 0},
+        }
+        for attempt in range(3):
+            try:
+                reply = _call(url, token, body, timeout=300)
+                break
+            except GoogleError as exc:
+                last = exc
+                if "HTTP 400" in str(exc) and sampled:
+                    reply = None
+                    break
+                if attempt == 2 or not any(code in str(exc) for code in ("HTTP 429", "HTTP 500", "HTTP 503", "reach")):
+                    raise
+                time.sleep(5 * (attempt + 1))
+        else:
+            reply = None
+        if reply is not None:
+            break
+    else:
+        raise last or GoogleError("Google did not answer")
+    parts = ((reply.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+    text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+    try:
+        answer = json.loads(text)
+    except ValueError:
+        raise GoogleError(f"the model did not answer in JSON: {text[:300]}") from None
+    usage = reply.get("usageMetadata") or {}
+    return answer, {
+        "input_tokens": usage.get("promptTokenCount", 0),
+        "output_tokens": usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0),
+    }
 
 
 def _parts(reply: dict):

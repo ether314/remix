@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from remix import dialogue, remixes, restyle, verify, voices
+from remix import dialogue, mouths, remixes, restyle, verify, voices
 from test_voices import fake_wav, write_script
 
 LINES = [
@@ -290,3 +290,63 @@ def test_the_dialogue_gate_stays_closed_until_script_and_picture_agree(project):
     assert "| 2 |" in dialogue.render(project, "dub").read_text()
     (project.root / "blueprint.json").write_text(json.dumps({"characters": [{"id": "host", "shots": [1]}], "no_one_on_screen": [2], "shots": []}))
     assert dialogue.problems(project, "dub") == [] and dialogue.plan(project, "dub")["shots"][1]["on_screen"] == []
+
+
+def test_the_mouth_check_holds_a_clip_against_who_is_heard_when():
+    want = {"watch": ["dave", "mantis"], "heard": [{"speaker": "mantis", "from": 1.0, "to": 4.0}]}
+    good = {"characters": [{"id": "mantis", "mouth_visible": True, "mouth_moving": [[1.1, 3.9]]},
+                           {"id": "dave", "mouth_visible": True, "mouth_moving": []}]}
+    assert mouths.judge(want, good) == []
+    smiling = {"characters": [{"id": "mantis", "mouth_visible": True, "mouth_moving": [[1.0, 1.8]]},
+                              {"id": "dave", "mouth_visible": True, "mouth_moving": []}]}
+    assert "moves for only 0.8 s" in mouths.judge(want, smiling)[0]
+    wrong = {"characters": [{"id": "mantis", "mouth_visible": True, "mouth_moving": []},
+                            {"id": "dave", "mouth_visible": True, "mouth_moving": [[0.5, 4.0]]}]}
+    found = mouths.judge(want, wrong)
+    assert any("mantis speaks" in p for p in found) and any("dave's mouth moves for 3.0 s while mantis is the one heard" in p for p in found)
+    assert "cuts to a different scene at 2.9 s" in mouths.judge(want, {**good, "scene_changes": [2.9]})[0]
+    assert mouths.judge(want, {**good, "scene_changes": [0.1]}) == []
+    assert mouths.judge(want, {**good, "scene_changes": [3.1]}, length=3.2) == [] and mouths.trim_point({"scene_changes": [3.1]}, 3.2) == 3.0
+    assert mouths.trim_point({"scene_changes": [1.5]}, 3.2) is None and mouths.trim_point({}, 3.2) is None
+    hidden = {"characters": [{"id": "dave", "mouth_visible": False, "mouth_moving": []}, {"id": "mantis", "mouth_visible": True, "mouth_moving": [[1, 4]]}]}
+    assert mouths.judge(want, hidden) == []  # a mouth that cannot be seen is not held against the shot
+    short = {"watch": ["dave"], "heard": [{"speaker": "dave", "from": 2.0, "to": 2.4}]}
+    assert mouths.judge(short, {"characters": [{"id": "dave", "mouth_visible": True, "mouth_moving": [[2.1, 2.3]]}]}) == []
+
+
+def test_a_shot_that_fails_the_mouth_check_is_retaken_and_the_best_take_is_kept(project, tmp_path, tone):
+    speech_stem(project, [(0.5, 1.5), (2.0, 2.8)], seconds=3.0)
+    write_script(project, "dub", [
+        {"id": 1, "start": 0.5, "end": 1.5, "speaker": "host", "text": "Hello there."},
+        {"id": 2, "start": 2.0, "end": 2.8, "speaker": "guest", "text": "Good morning."},
+    ])
+    voices.generate(project, "dub", synth=synth, workers=1)
+    project.set_rights("own")
+    remixes.audio_remix(project, "dub", tone(tmp_path / "bed.wav", 220, 3, 0.2), voice=voices.folder(project, "dub") / "voice.wav")
+    write_script(project, "clay", [
+        {"id": 1, "start": 0.5, "end": 1.5, "speaker": "host", "text": "Hello there."},
+        {"id": 2, "start": 2.0, "end": 2.8, "speaker": "guest", "text": "Good morning."},
+    ])
+    folder = voices.folder(project, "clay")
+    (folder / "look.json").write_text(json.dumps({"style": "Clay.", "characters": {}, "keep": "Keep it.", "audio_from": "dub", "names": {}}))
+    (project.root / "timeline.json").write_text(json.dumps({"shots": [{"index": 1, "start": 0.0, "end": 3.0, "duration": 3.0}]}))
+    (project.root / "blueprint.json").write_text(json.dumps({"characters": [{"id": "host", "shots": [1]}, {"id": "guest", "shots": [1]}],
+                                                              "shots": [{"index": 1, "description": "a"}]}))
+    asked, answers = [], iter([
+        {"characters": [{"id": "host", "mouth_visible": True, "mouth_moving": []}, {"id": "guest", "mouth_visible": True, "mouth_moving": []}]},
+        {"characters": [{"id": "host", "mouth_visible": True, "mouth_moving": [[0.5, 1.5]]}, {"id": "guest", "mouth_visible": True, "mouth_moving": [[2.0, 2.8]]}]},
+    ])
+
+    def edit(video, prompt, resolution, references):
+        asked.append(prompt)
+        return video + bytes([len(asked)]), {}  # every take is a different file, as real ones are
+
+    def watch(clip, text, schema):
+        return next(answers), {"input_tokens": 1000, "output_tokens": 50}
+
+    record = restyle.full(project, "clay", edit=edit, mouth_check=True, watch=watch)
+    assert len(asked) == 2 and "The last attempt at this shot was wrong" in asked[1] and "host speaks from" in asked[1]
+    assert record["mouth_failed"] == {} and mouths.problems(project, "clay") == []
+    saved = json.loads((folder / "shots" / "0001_mouths.json").read_text())
+    assert saved["ok"] and saved["usd"] > 0
+    assert len(restyle.pending_shots(project, "clay")) == 0  # the check does not make the shot outdated

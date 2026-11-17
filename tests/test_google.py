@@ -64,3 +64,14 @@ def test_generate_music_polls_until_the_interaction_completes(monkeypatch):
     assert calls[0][1]["model"] == "lyria-3-pro-preview"
     assert calls[0][1]["input"][0]["content"] == [{"type": "text", "text": "instrumental piano"}]
     assert calls[1] == (f"{base}/abc", None)
+
+
+def test_a_connection_dropped_mid_answer_is_a_google_error(monkeypatch):
+    import http.client
+
+    def drop(*args, **kwargs):
+        raise http.client.RemoteDisconnected("Remote end closed connection without response")
+
+    monkeypatch.setattr(google.urllib.request, "urlopen", drop)
+    with pytest.raises(google.GoogleError, match="could not reach Google"):
+        google._call("https://example.invalid/x", "token", {"a": 1})

@@ -29,6 +29,12 @@ prices:
   - {id: flash-lite-tts.text-in, provider: google, model: gemini-3.8-flash-lite-tts, unit: 1M tokens, usd: 0.50, until: 2026-12-31, source: agent-platform}
   - {id: flash-lite-tts.text-in, provider: google, model: gemini-3.8-flash-lite-tts, unit: 1M tokens, usd: 1.00, from: 2027-01-01, source: agent-platform}
 
+  # Gemini 3.8 Flash reading a clip (the mouth check): billed per token, video counted as input.
+  - {id: gemini-flash.input, provider: google, model: gemini-3.8-flash, unit: 1M tokens, usd: 0.75, until: 2026-12-31, source: agent-platform}
+  - {id: gemini-flash.input, provider: google, model: gemini-3.8-flash, unit: 1M tokens, usd: 1.50, from: 2027-01-01, source: agent-platform}
+  - {id: gemini-flash.text-out, provider: google, model: gemini-3.8-flash, unit: 1M tokens, usd: 3.75, until: 2026-12-31, source: agent-platform}
+  - {id: gemini-flash.text-out, provider: google, model: gemini-3.8-flash, unit: 1M tokens, usd: 7.50, from: 2027-01-01, source: agent-platform}
+
   # Video, Gemini Omni: billed per token for what goes in and what comes out.
   - {id: omni-1.2-flash.video-out, provider: google, model: gemini-omni-1.2-flash, unit: 1M tokens, usd: 12.00, source: agent-platform}
   - {id: omni-1.2-flash.input, provider: google, model: gemini-omni-1.2-flash, unit: 1M tokens, usd: 1.50, source: agent-platform}
