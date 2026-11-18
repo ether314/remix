@@ -39,9 +39,15 @@ CUE = 0.05  # seconds a caption cue may differ from its line's slot
 FOUND = 0.4  # correlation below which the voice track was not found in the video's sound
 
 
+NUMBER_WORDS = ("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+                "seventeen eighteen nineteen twenty").split()
+
+
 def words_of(text: str) -> list[str]:
     plain = "".join(c for c in unicodedata.normalize("NFKD", text.lower()) if not unicodedata.combining(c))
-    return re.sub(r"[^\w\s]", " ", plain.replace("-", " ")).split()
+    words = re.sub(r"[^\w\s]", " ", plain.replace("-", " ")).split()
+    # a transcriber writes 12 where a script says twelve: compare small numbers as words
+    return [NUMBER_WORDS[int(w)] if w.isdigit() and int(w) < len(NUMBER_WORDS) else w for w in words]
 
 
 def listen(path: Path) -> list[dict]:
@@ -51,10 +57,15 @@ def listen(path: Path) -> list[dict]:
 
     audio = np.frombuffer(read_pcm_f32(path, 16000), dtype=np.float32).copy()
     model = WhisperModel(config.WHISPER_MODEL, device="cpu", compute_type="int8", cpu_threads=6)
-    found, _ = model.transcribe(
-        audio, beam_size=5, word_timestamps=True, vad_filter=False, condition_on_previous_text=False
-    )
-    return [{"word": w.word, "start": w.start, "end": w.end} for seg in found for w in (seg.words or [])]
+
+    def run(**options):
+        found, _ = model.transcribe(audio, beam_size=5, word_timestamps=True, condition_on_previous_text=False, **options)
+        return [{"word": w.word, "start": w.start, "end": w.end} for seg in found for w in (seg.words or [])]
+
+    try:
+        return run(vad_filter=False)
+    except IndexError:  # faster-whisper's word timing fails on a stretch with no speech tokens (music); skip such stretches
+        return run(vad_filter=True)
 
 
 def stream_facts(path: Path) -> dict:
@@ -162,11 +173,12 @@ def _srt_seconds(stamp: str) -> float:
     return int(hours) * 3600 + int(minutes) * 60 + float(rest)
 
 
-def caption_problems(folder: Path, lines: list[dict]) -> list[dict]:
-    """captions.srt must be exactly what the script produces: the same words in the same time slots."""
-    captions = folder / "captions.srt"
+def caption_problems(folder: Path, lines: list[dict], srt: str = "captions.srt") -> list[dict]:
+    """The captions file must be exactly what the script produces: the same words in the same time slots."""
+    captions = folder / srt
     if not captions.is_file():
         return []
+    lines = [line for line in lines if line.get("captions", True)]
     shown = []
     for block in re.split(r"\n\s*\n", captions.read_text(encoding="utf-8").strip()):
         rows = [row for row in block.splitlines() if row.strip()]
@@ -176,7 +188,7 @@ def caption_problems(folder: Path, lines: list[dict]) -> list[dict]:
             shown.append((start, end, " ".join(rows[rows.index(timing) + 1 :])))
     wanted = [cue for line in lines for cue in voices.split_cue(line["start"], line["end"], line["text"])]
     if words_of(" ".join(text for _, _, text in shown)) != words_of(" ".join(cue["text"] for cue in wanted)):
-        return [{"problem": "captions.srt does not match the script: rerun `remix captions`"}]
+        return [{"problem": f"{srt} does not match the script: rerun `remix captions`"}]
     late = [
         cue["text"] for cue, (start, end, _) in zip(wanted, shown)
         if len(wanted) == len(shown) and (abs(cue["start"] - start) > CUE or abs(cue["end"] - end) > CUE)

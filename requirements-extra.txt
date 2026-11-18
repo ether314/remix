@@ -1,0 +1,3 @@
+# Packages added after the heavy layers of the image were built. Installing them is a separate, small Docker layer, so
+# adding one never reinstalls PyTorch and the model stack. Fold them into requirements.txt the next time that file changes anyway.
+elevenlabs>=2.0,<3   # the official ElevenLabs SDK: speech and music through the API (see src/remix/elevenlabs.py)

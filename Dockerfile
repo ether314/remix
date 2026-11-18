@@ -20,6 +20,11 @@ COPY requirements.txt ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
+# Small additions live in their own layer so they never reinstall the heavy ones above.
+COPY requirements-extra.txt ./
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements-extra.txt
+
 COPY pyproject.toml ./
 COPY src ./src
 COPY tests ./tests

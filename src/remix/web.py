@@ -21,7 +21,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import blueprint as bp
-from . import config, cost, dialogue, restyle, verify, voices
+from . import config, cost, dialogue, elevenlabs, google, make, restyle, verify, voices
 from .project import Project, ProjectError, find, ingest, list_projects, now_iso, slugify
 
 PORT = int(os.environ.get("REMIX_WEB_PORT", "8765"))
@@ -239,7 +239,9 @@ def project_view(project: Project) -> dict:
 def state() -> dict:
     rows = cost.entries()
     return {
-        "projects": [summary(p) for p in list_projects()],
+        "projects": [summary(p) for p in list_projects() if not make.is_make(p)],
+        "makes": [make_summary(p) for p in make.make_projects()],
+        "voices": list(google.VOICES),
         "cap": config.CAP_USD,
         "credit": cost.credit_status(rows, date.today()),
         "spent": round(sum(r["usd"] for r in rows), 4),
@@ -252,6 +254,161 @@ def state() -> dict:
         },
         "jobs": sorted(JOBS.table.values(), key=lambda j: j["started"], reverse=True)[:8],
     }
+
+
+# --- make a video from a prompt -----------------------------------------------------------------
+
+
+def make_summary(project: Project) -> dict:
+    brief = make.brief_of(project)
+    return {"slug": project.slug, "title": brief.get("title", project.slug), "seconds": brief.get("seconds"),
+            "aspects": brief.get("aspects"), "busy": JOBS.busy(project.slug)}
+
+
+def audio_view(project: Project, plan: dict | None) -> dict:
+    """Where the voice and music come from, and for ElevenLabs what is still to be made there."""
+    provider = make.audio_provider(project)
+    out: dict = {"provider": provider, "providers": list(elevenlabs.PROVIDERS), "api": elevenlabs.api_ready()}
+    if provider == "elevenlabs" and plan and any(s.get("vo") for s in plan.get("scenes", [])):
+        try:
+            order = make.audio_order(project, write=False)
+        except make.MakeError:
+            return out
+        out |= {"lines": order["lines"], "missing": order["missing"], "folder": order["folder"], "music": order["music"]}
+    return out
+
+
+def make_set_provider(project: Project, body: dict) -> dict:
+    try:
+        return {"provider": make.set_audio_provider(project, str(body.get("provider", "")))}
+    except make.MakeError as exc:
+        raise Refused(str(exc), 400) from None
+
+
+def make_view(project: Project) -> dict:
+    """Everything the page needs to show one make project and decide what is next."""
+    brief, root = make.brief_of(project), project.root
+    plan_path = root / "plan.json"
+    plan = _read(plan_path)
+    rows = cost.entries()
+    view: dict = {
+        **make_summary(project), "brief": brief, "plan": plan,
+        "plan_text": plan_path.read_text(encoding="utf-8") if plan_path.is_file() else "",
+        "spent": round(sum(r["usd"] for r in rows if r["project"] == project.slug), 4),
+        "google_ready": google_ready(), "tiers": list(make.TIERS), "problems": [], "estimates": {}, "shots": [], "scenes": [],
+    }
+    if plan:
+        view["problems"] = make.validate(project, plan)
+        view["estimates"] = {t: round(cost.total(make.estimate_shots(plan, t)), 2) for t in make.TIERS}
+        view["scenes"] = [{"id": s["id"], "kind": s["kind"], "start": s["start"], "end": s["end"], "vo": s.get("vo", "")} for s in make.schedule(plan)]
+        for sid, shot in plan.get("shots", {}).items():
+            best = make.best_clip(project, sid)
+            qa = _read(best.with_suffix(".qa.json")) if best else None
+            view["shots"].append({"id": sid, "seconds": shot["seconds"], "prompt": shot["prompt"], "tiers": make.tiers_present(project, sid),
+                                  "clip": project.rel(best) if best else None, "qa": qa})
+    view["audio"] = audio_view(project, plan)
+    folder = voices.folder(project, make.REMIX)
+    voice_report = _read(folder / "voice.json")
+    view["voice"] = ({k: voice_report.get(k) for k in ("lines", "sped_up", "slowed", "usd", "voices")} | {"file": project.rel(folder / "voice.wav")}) if voice_report else None
+    music = next(iter(sorted(root.glob("music.*"))), None)
+    view["music"] = project.rel(music) if music else None
+    view["renders"] = {}
+    for aspect in brief.get("aspects", []):
+        out = root / "out" / aspect.replace(":", "x")
+        final = out / "final.mp4"
+        view["renders"][aspect] = {
+            "final": project.rel(final) if final.is_file() else None, "check": _read(out / "check.json"),
+            "sheet": project.rel(out / "check_sheet.jpg") if (out / "check_sheet.jpg").is_file() else None,
+            "captions": project.rel(out / "captions.srt") if (out / "captions.srt").is_file() else None,
+        }
+    return view
+
+
+def make_new(body: dict) -> dict:
+    title = " ".join(str(body.get("title", "")).split())
+    if not title:
+        raise Refused("give the video a title", 400)
+    brief = {k: body.get(k) for k in ("prompt", "style", "brand", "cta", "audience", "voice", "elevenlabs_voice")}
+    try:
+        brief["audio_provider"] = elevenlabs.provider_of(str(body.get("audio_provider") or "gemini"))
+    except elevenlabs.ElevenLabsError as exc:
+        raise Refused(str(exc), 400) from None
+    brief |= {"seconds": float(body.get("seconds") or 30), "aspects": body.get("aspects") or ["16:9"], "brand_in_hook": bool(body.get("brand"))}
+    try:
+        project = make.create(title, brief)
+    except (make.MakeError, ValueError) as exc:
+        raise Refused(str(exc), 400) from None
+    return {"slug": project.slug}
+
+
+def make_save_plan(project: Project, text: str) -> dict:
+    try:
+        plan = json.loads(text)
+    except ValueError as exc:
+        raise Refused(f"the plan is not valid JSON: {exc}", 400) from None
+    if not isinstance(plan, dict) or not isinstance(plan.get("scenes"), list):
+        raise Refused("the plan needs a list of scenes", 400)
+    return {"problems": make.save_plan(project, plan)}
+
+
+def make_job(project: Project, action: str, body: dict) -> dict:
+    """Start one step of a make project as a job. Paid steps need Google access and respect the cap."""
+    args = ["make", action, project.slug]
+    usd = 0.0
+    by_hand = action in ("voice", "music") and make.audio_provider(project) == "elevenlabs"  # made in ElevenLabs: free here, nothing to pay Google
+    paid = action in ("plan", "shots", "voice", "music") and not by_hand
+    if paid and not google_ready():
+        raise Refused("Google access is not set up for this run: start the app with start-web.cmd")
+    try:
+        if action == "plan":
+            args.append("--draft")
+            usd = 0.01
+        elif action == "shots":
+            tier = body.get("tier", "pilot")
+            if tier not in make.TIERS:
+                raise Refused("unknown tier", 400)
+            plan = make.load_plan(project)
+            only = [str(i) for i in body.get("only") or []]
+            todo = [s for s in plan["shots"] if (not only or s in only) and (body.get("redo") or not (project.root / "shots" / f"{s}.{tier}.mp4").is_file())]
+            if not todo:
+                raise Refused("every shot already has a clip at this tier")
+            if tier != "pilot" and any("pilot" not in make.tiers_present(project, s) and not body.get("redo") for s in todo):
+                raise Refused("pilot the shots first (the cheapest tier): the full-quality run is the expensive step")
+            problems = make.validate(project, plan)
+            if problems:
+                raise Refused("fix the plan first: " + problems[0])
+            usd = cost.total(make.estimate_shots(plan, tier, todo))
+            if not cost.within_cap(usd) and not body.get("approve_over_cap"):
+                raise Refused(f"${usd:.2f} is over the ${config.CAP_USD:g} cap: tick the approval box to run it")
+            args += ["--tier", tier] + (["--only", ",".join(only)] if only else []) + (["--redo"] if body.get("redo") else []) + (["--yes"] if not cost.within_cap(usd) else [])
+        elif action == "voice":
+            plan = make.load_plan(project)
+            if make.validate(project, plan):
+                raise Refused("fix the plan first: " + make.validate(project, plan)[0])
+            if by_hand and not elevenlabs.api_ready():  # with the API connected, the step makes the missing takes itself
+                missing = make.audio_order(project, write=False)["missing"]
+                if missing:
+                    raise Refused(f"{len(missing)} voice line(s) are not made in ElevenLabs yet: ask Claude to make them there, save the takes yourself, "
+                                  f"or set {elevenlabs.KEY_ENV} so the app can")
+            elif not by_hand:
+                usd = 0.04
+        elif action == "music":
+            if by_hand and not elevenlabs.api_ready() and elevenlabs.music_file(project) is None:
+                raise Refused("the music is not made in ElevenLabs yet: ask Claude to make it there, save it as eleven/music.mp3 in the project, "
+                              f"or set {elevenlabs.KEY_ENV} so the app can")
+            usd = 0.0 if by_hand else 0.08
+        elif action == "render":
+            if body.get("aspect"):
+                args += ["--aspect", str(body["aspect"])]
+            if body.get("preview"):
+                args.append("--preview")
+        elif action == "check":
+            args += ["--aspect", str(body.get("aspect") or "16:9")] + (["--frames-ok"] if body.get("frames_ok") else [])
+        else:
+            raise Refused("not found", 404)
+    except make.MakeError as exc:
+        raise Refused(str(exc)) from None
+    return JOBS.start(f"{action} for '{project.slug}'", project.slug, args, usd)
 
 
 # --- actions ------------------------------------------------------------------------------------
@@ -453,6 +610,12 @@ class Handler(BaseHTTPRequestHandler):
         if writing and self.headers.get("X-Remix") != "1":
             raise Refused("missing X-Remix header", 403)
 
+    def _make(self, ref: str) -> Project:
+        try:
+            return make.find(unquote(ref))
+        except make.MakeError as exc:
+            raise Refused(str(exc), 404) from None
+
     def _body(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
         if length > 1_000_000:
@@ -525,6 +688,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(state())
             elif parts[:2] == ["api", "project"] and len(parts) == 3:
                 self._json(project_view(find(parts[2])))
+            elif parts[:2] == ["api", "make"] and len(parts) == 3:
+                self._json(make_view(self._make(parts[2])))
             elif parts[:2] == ["api", "jobs"] and len(parts) == 3 and parts[2] in JOBS.table:
                 self._json(JOBS.table[parts[2]])
             elif parts[:1] == ["media"] and len(parts) >= 3:
@@ -535,6 +700,20 @@ class Handler(BaseHTTPRequestHandler):
 
         if parts == ["api", "upload"]:
             self._json(self._upload(parse_qs(url.query)))
+            return
+        if parts == ["api", "make", "new"]:
+            self._json(make_new(self._body()))
+            return
+        if parts[:2] == ["api", "make"] and len(parts) == 4:
+            project, action, body = self._make(parts[2]), parts[3], self._body()
+            if JOBS.busy(project.slug) and action not in ("saveplan", "provider"):
+                raise Refused("a step is already running for this video; wait for it to finish")
+            if action == "saveplan":
+                self._json(make_save_plan(project, body.get("plan", "")))
+            elif action == "provider":
+                self._json(make_set_provider(project, body))
+            else:
+                self._json(make_job(project, action, body))
             return
         if parts[:2] != ["api", "project"] or len(parts) < 4:
             raise Refused("not found", 404)

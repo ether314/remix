@@ -75,3 +75,37 @@ def test_a_connection_dropped_mid_answer_is_a_google_error(monkeypatch):
     monkeypatch.setattr(google.urllib.request, "urlopen", drop)
     with pytest.raises(google.GoogleError, match="could not reach Google"):
         google._call("https://example.invalid/x", "token", {"a": 1})
+
+
+def test_veo_polls_until_done_and_returns_the_clip(monkeypatch):
+    monkeypatch.setenv("GOOGLE_ACCESS_TOKEN", "token")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "demo")
+    monkeypatch.setattr(google.time, "sleep", lambda s: None)
+    seen = []
+    answers = iter([
+        {"name": "projects/demo/operations/1"},
+        {"done": False},
+        {"done": True, "response": {"videos": [{"bytesBase64Encoded": base64.b64encode(b"MP4DATA").decode()}]}},
+    ])
+
+    def fake_call(url, token, body=None, timeout=600):
+        seen.append((url, body))
+        return next(answers)
+
+    monkeypatch.setattr(google, "_call", fake_call)
+    video, info = google.generate_veo("a cat", model="veo-3.1-lite-generate-001", resolution="720p", seconds=4)
+    assert video == b"MP4DATA" and info["seconds"] == 4
+    assert seen[0][0].endswith("veo-3.1-lite-generate-001:predictLongRunning")
+    assert seen[0][1]["parameters"]["durationSeconds"] == 4 and seen[0][1]["parameters"]["generateAudio"] is False
+    assert seen[1][1] == {"operationName": "projects/demo/operations/1"}
+    assert google.veo_price_id("veo-3.1-lite-generate-001", "720p", False) == "veo-3.1-lite.video.720p"
+
+
+def test_veo_says_why_when_the_clip_was_filtered(monkeypatch):
+    monkeypatch.setenv("GOOGLE_ACCESS_TOKEN", "token")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "demo")
+    monkeypatch.setattr(google.time, "sleep", lambda s: None)
+    answers = iter([{"name": "op"}, {"done": True, "response": {"raiMediaFilteredCount": 1, "raiMediaFilteredReasons": ["blocked"]}}])
+    monkeypatch.setattr(google, "_call", lambda *a, **k: next(answers))
+    with pytest.raises(google.GoogleError, match="filtered"):
+        google.generate_veo("x")

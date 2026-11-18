@@ -69,7 +69,7 @@
 </div>
 <div id="toast"></div>
 <script>
-let S = null, P = null, slug = localStorage.getItem('remix.slug'), timer = null, draft = {}, keep = {};
+let S = null, P = null, M = null, slug = localStorage.getItem('remix.slug'), mode = localStorage.getItem('remix.mode') || 'videos', mslug = localStorage.getItem('remix.make'), showNew = false, timer = null, draft = {}, keep = {};
 const $ = id => document.getElementById(id);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money = v => '$' + Number(v).toFixed(2);
@@ -95,7 +95,9 @@ async function refresh() {
   try {
     S = await api('/api/state');
     if (!S.projects.some(p => p.slug === slug)) slug = S.projects.length ? S.projects[0].slug : null;
-    P = slug ? await api('/api/project/' + encodeURIComponent(slug)) : null;
+    P = mode === 'videos' && slug ? await api('/api/project/' + encodeURIComponent(slug)) : null;
+    if (!S.makes.some(m => m.slug === mslug)) mslug = S.makes.length ? S.makes[0].slug : null;
+    M = mode === 'make' && mslug && !showNew ? await api('/api/make/' + encodeURIComponent(mslug)) : null;
   } catch (e) { toast(e.message, true); return; }
   render();
   clearTimeout(timer);
@@ -118,10 +120,10 @@ function renderSide() {
       <div class="small soft">Asks before any step over ${money(S.cap)}</div>
       <div class="small ${S.google.ready ? 'ok' : 'warn'}">${S.google.ready ? 'Google access ready (lasts about an hour from start; running ' + S.google.minutes_running + ' min)' : 'No Google access: paid steps are off. Start with start-web.cmd.'}</div>
     </div>`;
-  $('projects').innerHTML = '<h3>Videos</h3>' + (S.projects.length ? S.projects.map(p =>
+  $('projects').innerHTML = modeToggle() + (mode === 'make' ? makeList() : '<h3>Videos</h3>' + (S.projects.length ? S.projects.map(p =>
     `<button class="proj ${p.slug === slug ? 'on' : ''}" data-do="pick" data-slug="${esc(p.slug)}">${esc(p.name)}
        <small>${clock(p.duration)} · ${esc(p.rights || 'rights not set')}${p.busy ? ' · working' : ''}</small></button>`).join('')
-    : '<p class="soft small">None yet.</p>');
+    : '<p class="soft small">None yet.</p>'));
   const live = S.jobs.filter(j => j.status === 'queued' || j.status === 'running');
   const last = S.jobs.find(j => j.status === 'failed');
   $('jobs').innerHTML = (live.length ? '<h3>Working</h3>' + live.map(j =>
@@ -317,6 +319,7 @@ function render() {
   document.querySelectorAll('[data-keep]').forEach(el => { keep[el.id] = el.type === 'checkbox' ? el.checked : el.value; });  // what was typed survives a redraw
   renderSide();
   if (hold) return;  // do not redraw the form under someone who is typing in it
+  if (mode === 'make') { $('main').innerHTML = renderMake(); return; }
   $('main').innerHTML = P ? `<h1>${esc(P.name)}</h1>` + renderRights() + renderDecompose() + renderBlueprint() + renderCost() + renderMusic() + renderRestyle() + renderSpend()
     : '<h1>No videos yet</h1><p class="soft">Drop a video on the left to start.</p>';
 }
@@ -324,6 +327,7 @@ function render() {
 document.addEventListener('click', async e => {
   const b = e.target.closest('[data-do]'); if (!b) return;
   const d = b.dataset, base = '/api/project/' + encodeURIComponent(slug) + '/';
+  if (d.do === 'mode' || d.do.startsWith('mk-')) { await makeClick(d); return; }
   if (d.do === 'pick') { slug = d.slug; localStorage.setItem('remix.slug', slug); draft = {}; keep = {}; await refresh(); }
   else if (d.do === 'look') {
     const body = {name: $('rs-name').value, audio_from: $('rs-audio').value, style: $('rs-style').value,
@@ -352,6 +356,150 @@ document.addEventListener('click', async e => {
     await act(base + 'music', body, 'Generating music. This is a paid step and takes about a minute.');
   }
 });
+
+
+// --- make a video from a prompt ----------------------------------------------------------------------------
+const TIER_LABELS = {pilot: 'Pilot · Veo 3.1 Lite, 720p', final: 'Final · Veo 3.1 Fast, 1080p', hero: 'Hero · Veo 3.1, 1080p'};
+const modeToggle = () => `<div class="row" style="margin-bottom:10px"><button class="${mode === 'videos' ? 'on' : ''}" data-do="mode" data-v="videos">Videos</button><button class="${mode === 'make' ? 'on' : ''}" data-do="mode" data-v="make">Make from a prompt</button></div>`;
+const makeList = () => '<h3>Made from prompts</h3><button class="proj" data-do="mk-newform">+ New video</button>' + S.makes.map(m =>
+  `<button class="proj ${m.slug === mslug && !showNew ? 'on' : ''}" data-do="mk-pick" data-slug="${esc(m.slug)}">${esc(m.title)}<small>${m.seconds} s · ${esc((m.aspects || []).join(', '))}${m.busy ? ' · working' : ''}</small></button>`).join('');
+
+function renderMakeForm() {
+  const aspects = ['16:9', '1:1', '4:5', '9:16'];
+  return `<section class="card"><div class="head"><span class="num">+</span><h2>What should the video do?</h2></div><div class="body">
+    <p class="soft small">Describe the video and who it is for. Google's Gemini drafts a plan (scenes, shots, a voice-over and a score), you edit it, then each paid step shows its price first. Nothing is generated until you press a priced button.</p>
+    <input type="text" data-keep id="mk-title" placeholder="A title, for example: Product launch hook" value="${esc(val('mk-title', ''))}">
+    <textarea data-keep id="mk-prompt" placeholder="What is it about? What should the first five seconds do? What should the viewer do at the end?">${esc(val('mk-prompt', ''))}</textarea>
+    <div class="row"><label class="small soft">Length in seconds <input type="text" data-keep id="mk-seconds" value="${esc(val('mk-seconds', '30'))}" style="max-width:80px"></label>
+      ${aspects.map(a => `<label class="small"><input type="checkbox" data-keep id="mk-asp-${a.replace(':', 'x')}" ${val('mk-asp-' + a.replace(':', 'x'), a === '16:9') ? 'checked' : ''}> ${a}</label>`).join('')}</div>
+    <input type="text" data-keep id="mk-style" placeholder="Look (optional): photoreal and cinematic, claymation, flat illustration..." value="${esc(val('mk-style', ''))}">
+    <div class="row"><input type="text" data-keep id="mk-brand" placeholder="Brand to show in the first 5 s (optional)" value="${esc(val('mk-brand', ''))}" style="max-width:260px">
+      <input type="text" data-keep id="mk-cta" placeholder="Call to action" value="${esc(val('mk-cta', ''))}" style="max-width:260px"></div>
+    <input type="text" data-keep id="mk-audience" placeholder="Audience" value="${esc(val('mk-audience', ''))}">
+    <div class="row"><label class="small soft">Audio from <select data-keep id="mk-audio"><option value="gemini" ${val('mk-audio', 'gemini') === 'gemini' ? 'selected' : ''}>Gemini (paid, automatic)</option>
+        <option value="elevenlabs" ${val('mk-audio', 'gemini') === 'elevenlabs' ? 'selected' : ''}>ElevenLabs (your account, uses credits)</option></select></label>
+      <label class="small soft">Gemini voice <select data-keep id="mk-voice">${S.voices.map(v => `<option ${val('mk-voice', 'Kore') === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
+      <label class="small soft">ElevenLabs voice <input type="text" data-keep id="mk-eleven-voice" value="${esc(val('mk-eleven-voice', 'Zoe - Witty and Reassuring'))}" style="max-width:240px"></label></div>
+    <div class="row"><button class="primary" data-do="mk-create">Create the project (free)</button></div></div></section>`;
+}
+
+function mkPlan() {
+  const canPay = S.google.ready && !M.busy, p = M.plan, probs = M.problems;
+  let body = `<p class="small soft">${esc(M.brief.prompt || '')}</p>
+    <div class="row"><button class="primary" data-do="mk-plan" ${canPay ? '' : 'disabled'}>Draft the plan with Gemini · about $0.01</button>
+      ${S.google.ready ? '' : '<span class="small warn">Needs Google access.</span>'}</div>
+    <p class="small soft">The plan is plain JSON: shots to generate, scenes in order with their overlays and voice-over lines, and the music prompt. Edit it here or ask Claude to write it.</p>
+    <textarea data-keep id="mk-plan-text" style="min-height:240px;font-family:ui-monospace,Consolas,monospace;font-size:12px">${esc(val('mk-plan-text', M.plan_text))}</textarea>
+    <div class="row"><button data-do="mk-save" ${M.busy ? 'disabled' : ''}>Save the plan</button></div>`;
+  if (p) body += probs.length ? `<p class="small err">${probs.length} thing(s) to fix:</p><ul class="small">${probs.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`
+    : '<p class="small ok">The plan is valid.</p>';
+  if (M.scenes.length) body += `<table><tr><th>Scene</th><th>Time</th><th>Kind</th><th>Voice-over</th></tr>${M.scenes.map(sc =>
+    `<tr><td>${esc(sc.id)}</td><td class="num-cell">${clock(sc.start)}–${clock(sc.end)}</td><td>${esc(sc.kind)}</td><td class="small">${esc(sc.vo)}</td></tr>`).join('')}</table>`;
+  return gate(1, 'Brief and plan', p && !probs.length ? 'done' : 'ready', '', body);
+}
+
+function mkShots() {
+  if (!M.plan) return gate(2, 'Shots', 'locked', 'Make a plan first.', '');
+  const canPay = S.google.ready && !M.busy && !M.problems.length;
+  const tiers = M.tiers.map(t => {
+    const over = M.estimates[t] > S.cap;
+    return `<div class="row">${over ? `<label class="small warn"><input type="checkbox" id="mk-over-${t}"> I approve ${money(M.estimates[t])}, over my cap</label>` : ''}
+      <button class="${t === 'pilot' ? 'primary' : ''}" data-do="mk-shots" data-tier="${t}" ${canPay ? '' : 'disabled'}>${esc(TIER_LABELS[t])} · ${money(M.estimates[t])} for every shot</button></div>`;
+  }).join('');
+  const grid = M.shots.map(sh => `<div class="take"><div class="head"><b>${esc(sh.id)}</b><span class="soft small">${sh.seconds} s · ${sh.tiers.length ? esc(sh.tiers.join(', ')) : 'not made yet'}</span></div>
+      ${sh.clip ? `<video controls muted loop preload="none" src="${media(sh.clip)}"></video>` : ''}
+      <p class="small soft">${esc(sh.prompt.slice(0, 160))}${sh.prompt.length > 160 ? '...' : ''}</p>
+      ${sh.qa && !sh.qa.error ? `<p class="small ${(sh.qa.visible_text || []).length || sh.qa.has_watermark_or_logo || (sh.qa.artifacts || []).length ? 'warn' : 'ok'}">${esc(sh.qa.summary || '')}${(sh.qa.visible_text || []).length ? ' · text seen: ' + esc(sh.qa.visible_text.join(', ')) : ''}${(sh.qa.artifacts || []).length ? ' · ' + esc(sh.qa.artifacts.slice(0, 2).join('; ')) : ''}</p>` : ''}
+      ${sh.tiers.length ? `<div class="row"><button data-do="mk-shots" data-tier="${esc(sh.tiers[0])}" data-only="${esc(sh.id)}" data-redo="1" ${canPay ? '' : 'disabled'}>Make this one again (${esc(sh.tiers[0])})</button></div>` : ''}</div>`).join('');
+  const body = `<p>Veo clips are 4, 6 or 8 seconds. Pilot every shot at the cheapest tier first and look at them; the full-quality run is the expensive step, and each clip is kept, so a rerun only pays for what is missing. Gemini then watches each clip and reports any text, logo or glitch.</p>${tiers}
+    <p class="small soft">Footage never carries words: the text on screen is drawn by the app.</p><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">${grid}</div>`;
+  const done = M.shots.length && M.shots.every(sh => sh.tiers.includes('final') || sh.tiers.includes('hero'));
+  return gate(2, 'Shots', done ? 'done' : M.busy ? 'running' : 'ready', '', body);
+}
+
+function mkSound() {
+  if (!M.plan) return gate(3, 'Voice and music', 'locked', 'Make a plan first.', '');
+  const canPay = S.google.ready && !M.busy && !M.problems.length;
+  const A = M.audio || {provider: 'gemini'}, eleven = A.provider === 'elevenlabs';
+  const pick = `<div class="row"><span class="small soft">Make the voice and music with</span>
+      <button class="${eleven ? '' : 'on'}" data-do="mk-provider" data-v="gemini" ${M.busy ? 'disabled' : ''}>Gemini · Google, paid, automatic</button>
+      <button class="${eleven ? 'on' : ''}" data-do="mk-provider" data-v="elevenlabs" ${M.busy ? 'disabled' : ''}>ElevenLabs · your account, uses credits</button></div>`;
+  let controls = `<div class="row"><button class="primary" data-do="mk-voice" ${canPay ? '' : 'disabled'}>${M.voice ? 'Speak again' : 'Speak the voice-over'} · about $0.04</button>
+      <button data-do="mk-music" ${canPay ? '' : 'disabled'}>${M.music ? 'Generate new music' : 'Generate the music'} · about $0.04 to $0.08</button></div>`;
+  if (eleven) {
+    const lines = A.lines || [], missing = (A.missing || []).length, music = A.music || {};
+    const api = !!A.api;
+    controls = `${api ? `<p class="small ok">ElevenLabs API connected. The app speaks the lines and makes the music itself through the official SDK, using your account's credits (there is no dollar price). Takes already saved below are kept.</p>`
+      : `<p class="small soft">ElevenLabs speaks in your own account, so there is no dollar price here: it uses the account's credits. This app has no model of its own, so ask Claude to <i>make the ElevenLabs audio for ${esc(M.title)}</i>: Claude works in the browser where you are signed in to ElevenLabs and saves each take into the project (${esc(A.folder || '')}). To have the app do it by itself instead, set ELEVENLABS_API_KEY in your own environment (see CLAUDE.md) and restart the app. Then press the buttons below: they fit every take to its scene.</p>`}
+      ${lines.length ? `<table><tr><th>Line</th><th>Voice</th><th>Text</th><th>Take</th></tr>${lines.map(r => `<tr><td>${r.id}</td><td class="small">${esc(r.voice)}</td><td class="small">${esc(r.text)}</td><td>${r.have ? chip('done', 'saved') : chip('', 'to make')}</td></tr>`).join('')}</table>` : '<p class="small warn">The plan has no voice-over lines yet.</p>'}
+      ${A.music ? `<p class="small ${music.have ? 'ok' : 'warn'}">Music: ${music.have ? 'saved' : 'still to make'} (about ${esc(String(music.seconds))} s)</p>` : ''}
+      <div class="row"><button class="primary" data-do="mk-voice" ${M.busy || (missing && !api) || !lines.length ? 'disabled' : ''}>${api && missing ? 'Speak the missing lines with ElevenLabs · uses credits' : M.voice ? 'Bring in the voice takes again · free' : 'Bring in the voice takes · free'}</button>
+        <button data-do="mk-music" ${M.busy || (!music.have && !api) ? 'disabled' : ''}>${api && !music.have ? 'Make the music with ElevenLabs · uses credits' : 'Bring in the music · free'}</button></div>`;
+  }
+  const body = `${pick}${controls}
+    ${M.voice ? `<h3>Voice-over</h3><audio controls preload="none" src="${media(M.voice.file)}"></audio><p class="small soft">${esc(Object.entries(M.voice.voices || {}).map(v => v[0] + ': ' + v[1]).join(', '))} · ${M.voice.lines} lines, ${M.voice.sped_up} sped up, ${M.voice.slowed} slowed</p>` : ''}
+    ${M.music ? `<h3>Music</h3><audio controls preload="none" src="${media(M.music)}"></audio>` : ''}`;
+  return gate(3, 'Voice and music', M.voice && M.music ? 'done' : M.busy ? 'running' : 'ready', '', body);
+}
+
+function mkRender() {
+  if (!M.plan) return gate(4, 'Render and check', 'locked', 'Make a plan first.', '');
+  const body = (M.brief.aspects || []).map(a => {
+    const r = M.renders[a] || {}, c = r.check;
+    return `<div class="take"><div class="head"><b>${esc(a)}</b>${c ? chip(c.passed ? 'done' : '', c.passed ? 'Checked' : 'Not checked') : ''}</div>
+      <div class="row"><button class="primary" data-do="mk-render" data-aspect="${esc(a)}" ${M.busy ? 'disabled' : ''}>Render ${esc(a)} (free)</button>
+        <label class="small"><input type="checkbox" id="mk-prev-${a.replace(':', 'x')}"> allow pilot clips (a preview)</label></div>
+      ${r.final ? `<video controls preload="metadata" src="${media(r.final)}" style="max-height:520px"></video>
+        <div class="row"><a class="tag" href="${media(r.final)}" download>Download MP4</a>${r.captions ? `<a class="tag" href="${media(r.captions)}" download>Download captions (.srt)</a>` : ''}</div>
+        <div class="row"><button data-do="mk-check" data-aspect="${esc(a)}" ${M.busy ? 'disabled' : ''}>Check it</button>
+          ${r.sheet && c && !c.passed ? `<button data-do="mk-frames" data-aspect="${esc(a)}" ${M.busy ? 'disabled' : ''}>I looked at the contact sheet and it is right</button>` : ''}</div>` : ''}
+      ${c ? `<p class="small soft">${c.loudness.lufs} LUFS, peak ${c.loudness.true_peak_db} dB</p>${c.problems.length ? `<ul class="small err">${c.problems.map(p => `<li>${esc((p.line ? 'line ' + p.line + ': ' : '') + p.problem)}</li>`).join('')}</ul>` : '<p class="small ok">The video matches its plan and script.</p>'}` : ''}
+      ${r.sheet ? `<details><summary>Contact sheet: every second of the video</summary><img class="sheet" loading="lazy" src="${media(r.sheet)}"></details>` : ''}</div>`;
+  }).join('') + `<p class="small soft">Spent on this video so far: ${money(M.spent)}.</p>`;
+  const all = (M.brief.aspects || []).every(a => ((M.renders[a] || {}).check || {}).passed);
+  return gate(4, 'Render and check', all ? 'done' : M.busy ? 'running' : 'ready', '', body);
+}
+
+function renderMake() {
+  if (!M) return '<h1>Make a video from a prompt</h1>' + renderMakeForm();
+  return `<h1>${esc(M.title)}</h1>` + mkPlan() + mkShots() + mkSound() + mkRender();
+}
+
+async function makeClick(d) {
+  if (d.do === 'mode') { mode = d.v; localStorage.setItem('remix.mode', mode); keep = {}; showNew = false; await refresh(); return; }
+  if (d.do === 'mk-newform') { showNew = true; M = null; keep = {}; render(); return; }
+  if (d.do === 'mk-pick') { mslug = d.slug; showNew = false; keep = {}; localStorage.setItem('remix.make', mslug); await refresh(); return; }
+  if (d.do === 'mk-create') {
+    const body = {title: $('mk-title').value, prompt: $('mk-prompt').value, seconds: $('mk-seconds').value, style: $('mk-style').value, brand: $('mk-brand').value,
+      cta: $('mk-cta').value, audience: $('mk-audience').value, voice: $('mk-voice').value,
+      audio_provider: $('mk-audio').value, elevenlabs_voice: $('mk-eleven-voice').value,
+      aspects: ['16:9', '1:1', '4:5', '9:16'].filter(a => $('mk-asp-' + a.replace(':', 'x')).checked)};
+    try { const r = await api('/api/make/new', body); mslug = r.slug; localStorage.setItem('remix.make', mslug); showNew = false; keep = {}; toast('Created. Draft the plan next.'); }
+    catch (e) { toast(e.message, true); }
+    await refresh(); return;
+  }
+  const base = '/api/make/' + encodeURIComponent(mslug) + '/';
+  if (d.do === 'mk-plan') await act(base + 'plan', {}, 'Drafting the plan with Gemini.');
+  else if (d.do === 'mk-save') {
+    try { const r = await api(base + 'saveplan', {plan: $('mk-plan-text').value}); keep = {}; toast(r.problems.length ? 'Saved, with ' + r.problems.length + ' thing(s) to fix.' : 'Saved. The plan is valid.', !!r.problems.length); }
+    catch (e) { toast(e.message, true); }
+    await refresh();
+  }
+  else if (d.do === 'mk-shots') {
+    const box = $('mk-over-' + d.tier);
+    await act(base + 'shots', {tier: d.tier, only: d.only ? [d.only] : [], redo: d.redo === '1', approve_over_cap: box ? box.checked : false}, 'Generating shots. This is a paid step; each clip takes a minute or two.');
+  }
+  else if (d.do === 'mk-provider') {
+    try { await api(base + 'provider', {provider: d.v}); toast(d.v === 'elevenlabs' ? 'Voice and music will come from ElevenLabs.' : 'Voice and music will come from Gemini.'); }
+    catch (e) { toast(e.message, true); }
+    await refresh();
+  }
+  else if (d.do === 'mk-voice') await act(base + 'voice', {}, M.audio && M.audio.provider === 'elevenlabs' ? 'Bringing in the ElevenLabs takes.' : 'Speaking the voice-over.');
+  else if (d.do === 'mk-music') await act(base + 'music', {}, M.audio && M.audio.provider === 'elevenlabs' ? 'Bringing in the ElevenLabs music.' : 'Generating the music.');
+  else if (d.do === 'mk-render') { const box = $('mk-prev-' + d.aspect.replace(':', 'x')); await act(base + 'render', {aspect: d.aspect, preview: box ? box.checked : false}, 'Rendering. This takes a minute or two.'); }
+  else if (d.do === 'mk-check') await act(base + 'check', {aspect: d.aspect}, 'Checking the video. This takes a few minutes.');
+  else if (d.do === 'mk-frames') await act(base + 'check', {aspect: d.aspect, frames_ok: true}, 'Checking again with the frames confirmed.');
+}
 
 async function upload(file) {
   if (!file) return;

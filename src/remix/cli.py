@@ -10,8 +10,9 @@ from typing import Optional
 
 import typer
 
-from . import __version__, config, cost, dialogue, google, mouths, overview, remixes, restyle, verify, voices
+from . import __version__, config, cost, dialogue, elevenlabs, google, mouths, overview, remixes, restyle, verify, voices
 from . import blueprint as bp
+from .cli_make import make_app
 from .media import MediaError
 from .project import RIGHTS, Project, ProjectError, find, ingest, list_projects, resolve_file, slugify
 
@@ -22,6 +23,7 @@ blueprint_app = typer.Typer(
 cost_app = typer.Typer(no_args_is_help=True, help="Prices, per-video estimates and the spend ledger.")
 app.add_typer(blueprint_app, name="blueprint")
 app.add_typer(cost_app, name="cost")
+app.add_typer(make_app, name="make")
 
 STEPS = ("audio", "stems", "transcript", "shots", "overview")
 REQUIRES = {"stems": ("audio",), "transcript": ("audio",), "overview": ("shots",)}
@@ -406,11 +408,39 @@ def voices_cmd(
     pilot: int = typer.Option(0, help="Speak only the first N lines into voice_pilot.wav, as a cheap check."),
     plain: bool = typer.Option(False, "--plain", help="Allow a full run on a script with few or no vocal cues."),
     redo: str = typer.Option("", help="Line ids to speak again, such as 23,44. Other lines keep their takes unless they changed."),
+    provider: str = typer.Option("", help="gemini (stock AI voices, paid) or elevenlabs (takes made in your ElevenLabs account, saved in the remix's eleven/ folder, free). Remembered in lines.json."),
 ) -> None:
-    """Speak a remix's lines with stock AI voices (a paid step, logged in the ledger)."""
+    """Speak a remix's lines with stock AI voices (a paid step, logged in the ledger), or bring in takes made in ElevenLabs."""
     project = _project(target)
     try:
+        if provider:
+            path, wanted = voices.folder(project, name) / "lines.json", elevenlabs.provider_of(provider)
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if raw.get("audio", "gemini") != wanted:
+                raw["audio"] = wanted
+                path.write_text(voices.dump_script(raw), encoding="utf-8")
         script = voices.load_lines(project, name)
+        if script.get("audio") == "elevenlabs":
+            order = elevenlabs.order(project, name, script)
+            wanted_ids = [line["id"] for line in script["lines"][:pilot or None]]
+            missing = [i for i in order["missing"] if i in wanted_ids]
+            if missing and elevenlabs.api_ready():  # a key is set: the SDK speaks the lines that have no take yet
+                typer.echo(f"ElevenLabs API: speaking {_count(len(missing), 'line')} (credits, not dollars)")
+                elevenlabs.fill_voice(project, name, script, ids=missing)
+                order = elevenlabs.order(project, name, script)
+                missing = [i for i in order["missing"] if i in wanted_ids]
+            typer.echo(f"ElevenLabs: {len(wanted_ids) - len(missing)} of {len(wanted_ids)} takes are saved; the order is in projects/{project.slug}/{order['folder']}/order.md")
+            if missing:
+                typer.echo(f"error: make line {', '.join(map(str, missing))} in ElevenLabs and save each take as NNNN.mp3 in that folder "
+                           f"(or set {elevenlabs.KEY_ENV} so the API does it), then run this again", err=True)
+                raise typer.Exit(1)
+            if not pilot:
+                _gate(project, name, ("script",))
+            result = voices.generate(project, name, synth=elevenlabs.Takes(project, name, script), pilot=pilot, redo=tuple(int(n) for n in redo.replace(" ", "").split(",") if n),
+                                     rerolls=0, provider="elevenlabs")
+            typer.echo(f"wrote projects/{project.slug}/remixes/{slugify(name)}/{result['file']}: {_count(result['lines'], 'line')} fitted to their slots, "
+                       f"{result['sped_up']} sped up, {result['slowed']} slowed ({result['characters']} characters of ElevenLabs credits)")
+            return
         chosen = script["lines"][:pilot] if pilot else script["lines"]
         cued = sum(1 for line in chosen if voices.cues(line))
         typer.echo(f"{cued} of {_count(len(chosen), 'line')} carry vocal cues (sighs, chuckles, breaths, pauses)")
@@ -433,7 +463,7 @@ def voices_cmd(
             typer.echo(f"error: that is above the ${config.CAP_USD:g} auto-run cap; pass --yes to run it", err=True)
             raise typer.Exit(1)
         result = voices.generate(project, name, pilot=pilot, redo=tuple(int(n) for n in redo.replace(" ", "").split(",") if n))
-    except (voices.VoiceError, google.GoogleError, ValueError) as exc:
+    except (voices.VoiceError, google.GoogleError, elevenlabs.ElevenLabsError, ValueError) as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1)
     typer.echo(f"wrote projects/{project.slug}/remixes/{slugify(name)}/{result['file']}")

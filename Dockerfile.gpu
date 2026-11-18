@@ -35,6 +35,11 @@ COPY requirements.txt ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
+# Small additions live in their own layer so they never reinstall the heavy ones above.
+COPY requirements-extra.txt ./
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements-extra.txt
+
 # CTranslate2 (under faster-whisper) loads libcublas.so.12 by name at run time, so the pip-installed
 # NVIDIA libraries have to be on the loader path. CTranslate2 4.6.3 and later no longer use cuDNN;
 # the cuDNN 9 directory is listed for the 4.5 to 4.6.2 wheels that requirements.txt also allows.

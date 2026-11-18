@@ -13,6 +13,10 @@ sources:
     url: https://aistudio.google.com/docs/pricing
     read: 2026-11-17
     note: Gemini API list prices. Agent Platform may differ; not confirmed there.
+  elevenlabs-plan:
+    url: https://elevenlabs.io/app/speech-synthesis/text-to-speech
+    read: 2026-11-18
+    note: Used through the user's own signed-in account (the page showed 50,000 credits left on the seat), not the API. Credits, not dollars, are spent.
 
 prices:
   # Music: billed per generation.
@@ -28,6 +32,10 @@ prices:
   - {id: flash-lite-tts.audio-out, provider: google, model: gemini-3.8-flash-lite-tts, unit: 1M tokens, usd: 12.00, from: 2027-01-01, source: agent-platform}
   - {id: flash-lite-tts.text-in, provider: google, model: gemini-3.8-flash-lite-tts, unit: 1M tokens, usd: 0.50, until: 2026-12-31, source: agent-platform}
   - {id: flash-lite-tts.text-in, provider: google, model: gemini-3.8-flash-lite-tts, unit: 1M tokens, usd: 1.00, from: 2027-01-01, source: agent-platform}
+
+  # ElevenLabs, made in the user's browser session: no dollar price per call, so these record characters and tracks at $0.
+  - {id: elevenlabs.speech, provider: elevenlabs, model: eleven-v4, unit: character, usd: 0.0, source: elevenlabs-plan}
+  - {id: elevenlabs.music, provider: elevenlabs, model: eleven-music, unit: track, usd: 0.0, source: elevenlabs-plan}
 
   # Gemini 3.8 Flash reading a clip (the mouth check): billed per token, video counted as input.
   - {id: gemini-flash.input, provider: google, model: gemini-3.8-flash, unit: 1M tokens, usd: 0.75, until: 2026-12-31, source: agent-platform}

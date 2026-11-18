@@ -15,6 +15,8 @@ It is built to be driven by an AI coding agent (it was written with Claude Code)
 | New voices | `remix lines`, `remix voices` | The script as timed lines, spoken by stock AI voices (Gemini TTS) with vocal cues, each line fitted to the time of its original utterance |
 | Captions | `remix captions` | `.srt` and styled `.ass` from the same lines, one color per speaker |
 | New picture | `remix restyle` | Every shot redrawn by a video model (Gemini Omni) from a `look.json`, pilot first, resumable, captions burned in |
+| Make from a prompt | `remix make new / plan / shots / voice / music / render / check` | A whole video from a brief: Gemini drafts the plan, Veo generates the shots (pilot tier first, then final), a stock voice and a score are added, every word on screen is drawn in code, and the result is checked. Also in the web app |
+| Audio provider | `--provider gemini\|elevenlabs` on `remix make voice / music`, `remix voices`; a picker in the web app | Voice and music from Gemini and Lyria (automatic, paid) or from your own ElevenLabs account: through the official SDK when `ELEVENLABS_API_KEY` is set, otherwise from takes saved into the project's `eleven/` folders. Either way every take is fitted to its slot and checked the same way |
 | Check | `remix verify` | Runs by itself after every remix: script against audio, captions and picture, and voice against picture timing |
 
 There is also a local web app (`start-web.cmd`, then http://localhost:8765) that walks one video through these stages as gates, with the price on every paid button and an explicit approval at the end of each.

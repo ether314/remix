@@ -188,6 +188,94 @@ def watch_video(video: bytes, prompt: str, schema: dict, model: str = VISION_MOD
     }
 
 
+def generate_json(prompt: str, schema: dict, model: str = VISION_MODEL, system: str = "", temperature: float = 0.8) -> tuple[dict, dict]:
+    """Ask Gemini for a JSON answer shaped by `schema` (text only). Returns (answer, token usage).
+
+    Used to draft plans. The answer is checked by the caller; a schema only makes the shape likely.
+    """
+    token, project = settings()
+    url = f"{TTS_API}/projects/{project}/locations/global/publishers/google/models/{model}:generateContent"
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json", "responseSchema": schema, "temperature": temperature},
+    }
+    if system:
+        body["systemInstruction"] = {"parts": [{"text": system}]}
+    reply = None
+    for attempt in range(3):
+        try:
+            reply = _call(url, token, body, timeout=300)
+            break
+        except GoogleError as exc:
+            if attempt == 2 or not any(code in str(exc) for code in ("HTTP 429", "HTTP 500", "HTTP 503", "reach")):
+                raise
+            time.sleep(5 * (attempt + 1))
+    parts = ((reply.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+    text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+    try:
+        answer = json.loads(text)
+    except ValueError:
+        raise GoogleError(f"the model did not answer in JSON: {text[:300]}") from None
+    usage = reply.get("usageMetadata") or {}
+    return answer, {
+        "input_tokens": usage.get("promptTokenCount", 0),
+        "output_tokens": usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0),
+    }
+
+
+VEO_API = "https://us-central1-aiplatform.googleapis.com/v1"
+VEO_MODELS = {  # model id -> price table prefix (prices.yaml)
+    "veo-3.1-generate-001": "veo-3.1",
+    "veo-3.1-fast-generate-001": "veo-3.1-fast",
+    "veo-3.1-lite-generate-001": "veo-3.1-lite",
+}
+
+
+def veo_price_id(model: str, resolution: str, audio: bool) -> str:
+    return f"{VEO_MODELS[model]}.{'video-audio' if audio else 'video'}.{resolution}"
+
+
+def generate_veo(
+    prompt: str, model: str = "veo-3.1-fast-generate-001", aspect: str = "16:9", resolution: str = "1080p",
+    seconds: int = 4, negative: str = "", seed: int | None = None, audio: bool = False, wait_seconds: int = 900,
+) -> tuple[bytes, dict]:
+    """Generate one clip with Veo from a text prompt. Returns (MP4 bytes, what Google reported).
+
+    Veo is billed per second of output (4, 6 or 8 s), at the rate for the model, resolution and
+    whether it makes sound. The request is a long-running operation that is polled until it is done.
+    """
+    token, project = settings()
+    base = f"{VEO_API}/projects/{project}/locations/us-central1/publishers/google/models/{model}"
+    parameters: dict = {
+        "aspectRatio": aspect, "sampleCount": 1, "durationSeconds": seconds, "resolution": resolution,
+        "personGeneration": "allow_adult", "generateAudio": audio,
+    }
+    if negative:
+        parameters["negativePrompt"] = negative
+    if seed is not None:
+        parameters["seed"] = seed
+    started = _call(f"{base}:predictLongRunning", token, {"instances": [{"prompt": prompt}], "parameters": parameters})
+    name = started.get("name")
+    if not name:
+        raise GoogleError(f"Veo did not start an operation: {json.dumps(started)[:400]}")
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        time.sleep(10)
+        reply = _call(f"{base}:fetchPredictOperation", token, {"operationName": name}, timeout=120)
+        if reply.get("done"):
+            break
+        if time.monotonic() > deadline:
+            raise GoogleError(f"Veo did not finish within {wait_seconds} s ({name})")
+    if reply.get("error"):
+        raise GoogleError(f"Veo failed: {json.dumps(reply['error'])[:500]}")
+    response = reply.get("response") or {}
+    for video in response.get("videos") or response.get("generatedSamples") or []:
+        if video.get("bytesBase64Encoded"):
+            return base64.b64decode(video["bytesBase64Encoded"]), {"model": model, "seconds": seconds, "operation": name}
+    filtered = response.get("raiMediaFilteredReasons") or response.get("raiMediaFilteredCount")
+    raise GoogleError(f"no video in Veo's reply ({'filtered: ' + json.dumps(filtered)[:300] if filtered else json.dumps(response)[:400]})")
+
+
 def _parts(reply: dict):
     """Output parts of an Interactions reply: v1beta1 lists them under `outputs`, the docs under `steps`."""
     yield from reply.get("outputs") or []

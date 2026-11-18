@@ -223,7 +223,8 @@ def load_lines(project: Project, name: str) -> dict:
     if not path.is_file():
         raise VoiceError(f"no lines.json for this remix: run `remix lines {project.slug} --name {slugify(name)}` first")
     script = json.loads(path.read_text(encoding="utf-8"))
-    unknown = sorted({v for v in script["voices"].values() if v not in google.VOICES})
+    # Gemini's voices are a fixed list; ElevenLabs voices are named in the user's account, so a script made for them is not checked here.
+    unknown = [] if script.get("audio") == "elevenlabs" else sorted({v for v in script["voices"].values() if v not in google.VOICES})
     if unknown:
         raise VoiceError(f"unknown voice(s) in lines.json: {', '.join(unknown)}")
     wrong = performance_problems(script["lines"])
@@ -431,7 +432,7 @@ def too_long(text: str, seconds: float) -> bool:
 
 def generate(
     project: Project, name: str, synth=google.synthesize, workers: int = 4, pilot: int = 0, redo: tuple[int, ...] = (),
-    rerolls: int = 2,
+    rerolls: int = 2, provider: str = "gemini",
 ) -> dict:
     """Speak the lines of lines.json, fit each to its slot, and write voice.wav plus a report.
 
@@ -461,7 +462,10 @@ def generate(
         # The performed text carries the vocal cues; a line's own `style` replaces its speaker's delivery note.
         style = line.get("style") or script["directions"].get(line["speaker"], "")
         voice_name = script["voices"][line["speaker"]]
-        key = hashlib.sha1(json.dumps([performed(line), voice_name, style], ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
+        parts = [performed(line), voice_name, style]
+        if hasattr(synth, "fingerprint"):  # a take made elsewhere (ElevenLabs): the file's own bytes decide whether it changed
+            parts.append(synth.fingerprint(performed(line)))
+        key = hashlib.sha1(json.dumps(parts, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
         take, note = takes / f"{line['id']:04d}.wav", takes / f"{line['id']:04d}.json"
         if not attempt and line["id"] not in redo and take.is_file() and note.is_file() and json.loads(note.read_text(encoding="utf-8")).get("key") == key:
             return take.read_bytes(), {}
@@ -484,7 +488,7 @@ def generate(
         words, target = (last - first) / RATE, max(line["end"] - line["start"], 0.2)
         return words / fit_speed(words, target) - target
 
-    tokens, rerolled = {"text_tokens": 0, "audio_tokens": 0, "respoken": 0}, set()
+    tokens, rerolled = {"text_tokens": 0, "audio_tokens": 0, "characters": 0, "respoken": 0}, set()
     with ThreadPoolExecutor(max_workers=workers) as pool:
         spoken = list(pool.map(speak, lines))
         for _, usage in spoken:
@@ -599,11 +603,15 @@ def generate(
 
     today = date.today()
     table = cost.load_table()
-    actual = [
-        table.line("new voice audio", "flash-tts.audio-out", tokens["audio_tokens"], today),
-        table.line("script text sent to the voice model", "flash-tts.text-in", tokens["text_tokens"], today),
-    ]
-    planned = cost.total(estimate({**script, "lines": lines}, today))
+    if provider == "elevenlabs":  # spoken in the user's own account: credits, not dollars
+        actual = [table.line("ElevenLabs speech (plan credits)", "elevenlabs.speech", tokens["characters"], today)]
+        planned = 0.0
+    else:
+        actual = [
+            table.line("new voice audio", "flash-tts.audio-out", tokens["audio_tokens"], today),
+            table.line("script text sent to the voice model", "flash-tts.text-in", tokens["text_tokens"], today),
+        ]
+        planned = cost.total(estimate({**script, "lines": lines}, today))
     for item in actual:
         if tokens["respoken"]:  # a run that reused every take made no paid call
             cost.record(project.slug, out.name, item, estimated_usd=planned, note="pilot" if pilot else "")
@@ -623,6 +631,8 @@ def generate(
         "usd": cost.total(actual),
         "estimated_usd": planned,
         "tokens": {key: tokens[key] for key in ("text_tokens", "audio_tokens")},
+        "provider": provider,
+        "characters": tokens["characters"],
         "report": report,
     }
     (out / ("voice_pilot.json" if pilot else "voice.json")).write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -659,20 +669,26 @@ def _ass_time(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{rest // 100:02d}.{rest % 100:02d}"
 
 
-def write_captions(project: Project, name: str) -> dict:
-    """captions.srt and a styled captions.ass (one color per speaker) from the remix's lines."""
+def write_captions(project: Project, name: str, size: tuple[int, int] | None = None, stem: str = "captions") -> dict:
+    """<stem>.srt and a styled <stem>.ass (one color per speaker) from the remix's lines.
+
+    `size` is the picture the captions will be burned into (width, height); it defaults to the source video's.
+    """
     from .steps.transcript import to_srt
 
     script = load_lines(project, name)
     info = project.load()["source"]
+    width, height = size or (info["width"], info["height"])
+    info = {**info, "width": width, "height": height}
     out = folder(project, name)
     speakers = list(script["voices"])
     cues = [
         {**cue, "speaker": line["speaker"]}
         for line in script["lines"]
+        if line.get("captions", True)  # a line whose words are already on screen as text can opt out
         for cue in split_cue(line["start"], line["end"], line["text"])
     ]
-    (out / "captions.srt").write_text(to_srt(cues), encoding="utf-8")
+    (out / f"{stem}.srt").write_text(to_srt(cues), encoding="utf-8")
 
     size = max(round(info["height"] * 0.042), 18)
     header = [
@@ -693,8 +709,8 @@ def write_captions(project: Project, name: str) -> dict:
         + c["text"].replace("\n", " ").replace("{", "(").replace("}", ")")
         for c in cues
     ]
-    (out / "captions.ass").write_text("\n".join(header + events) + "\n", encoding="utf-8")
-    return {"cues": len(cues), "outputs": [project.rel(out / "captions.srt"), project.rel(out / "captions.ass")]}
+    (out / f"{stem}.ass").write_text("\n".join(header + events) + "\n", encoding="utf-8")
+    return {"cues": len(cues), "outputs": [project.rel(out / f"{stem}.srt"), project.rel(out / f"{stem}.ass")]}
 
 
 def burn_captions(project: Project, name: str, video: Path) -> Path:
