@@ -30,6 +30,7 @@ REAL_PAUSE = 0.2  # a gap between words at least this long counts as one speaker
 DEFAULT_VOICES = ("Charon", "Kore", "Puck", "Aoede")  # handed to speakers in order of appearance
 CAPTION_COLORS = ("&H00FFFFFF", "&H0078D7FF", "&H00FFD27F", "&H0090EE90")  # ASS colors are BGR
 CAPTION_CHARS = 42
+WIDE_CAPTION_CHARS = 60  # for frames at least 1.5 times wider than tall
 
 
 # Inline vocal cues that Gemini 3.8 TTS performs rather than reads, written in angle brackets inside
@@ -642,6 +643,13 @@ def generate(
 # --- captions -----------------------------------------------------------------------------------
 
 
+def caption_chars(size: tuple[int, int] | None) -> int:
+    """How many characters one caption cue may hold. A render that names its frame size and is at least 1.5 times wider than
+    tall holds a longer line (60 at the usual caption size), so a line is not left with a one-word stub cue. Without a size
+    (captions for the source video of a remix) the old width stays, so captions made earlier remain what the check expects."""
+    return WIDE_CAPTION_CHARS if size and size[0] >= size[1] * 1.5 else CAPTION_CHARS
+
+
 def split_cue(start: float, end: float, text: str, max_chars: int = CAPTION_CHARS) -> list[dict]:
     """Break one line into caption-sized cues, sharing its time in proportion to the text."""
     words, chunks, current = text.split(), [], ""
@@ -682,11 +690,12 @@ def write_captions(project: Project, name: str, size: tuple[int, int] | None = N
     info = {**info, "width": width, "height": height}
     out = folder(project, name)
     speakers = list(script["voices"])
+    chars = caption_chars(size)
     cues = [
         {**cue, "speaker": line["speaker"]}
         for line in script["lines"]
         if line.get("captions", True)  # a line whose words are already on screen as text can opt out
-        for cue in split_cue(line["start"], line["end"], line["text"])
+        for cue in split_cue(line["start"], line["end"], line["text"], chars)
     ]
     (out / f"{stem}.srt").write_text(to_srt(cues), encoding="utf-8")
 

@@ -9,6 +9,15 @@ from remix.project import ingest
 from remix.steps import audio
 
 
+@pytest.fixture(autouse=True)
+def no_real_elevenlabs(monkeypatch):
+    """No test reaches the real ElevenLabs API, even when the user's key is in the environment (Docker Compose passes it in
+    from .env). Tests that exercise the SDK path set a made-up key and a fake client themselves."""
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.delenv("ELEVENLABS_MODEL", raising=False)
+    monkeypatch.delenv("ELEVENLABS_MUSIC_MODEL", raising=False)
+
+
 def make_tone(path, frequency: int, seconds: float, volume: float = 1.0):
     subprocess.run(
         [

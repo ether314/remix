@@ -21,7 +21,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 FPS = 30
-VERSION = "3"  # bump when scenes are drawn differently: it is part of the render cache key
+VERSION = "4"  # bump when scenes are drawn differently: it is part of the render cache key
 NAVY, TEAL, CYAN, DEEP, WHITE = (18, 40, 64), (30, 155, 170), (103, 232, 249), (23, 114, 126), (255, 255, 255)
 DANGER = (200, 30, 30)
 _FONTS: dict = {}
@@ -207,7 +207,7 @@ def ov_headline(img, o, t, size, assets):
     lines = wrap(o["text"], f, int(w * 0.84))
     gap = f.size * 1.18
     top = h * pos - gap * (len(lines) - 1) / 2
-    accent = {a.lower() for a in o.get("accent", [])}
+    accent = {a.lower().strip(".,!?") for a in o.get("accent", [])}  # "Free." and "Free" both pick out the word Free
     if o.get("kicker"):
         put_text(img, o["kicker"].upper(), font(assets, int(unit * 0.026), 700, False), (w / 2, top - gap * 0.95), CYAN, alpha)
     for i, line in enumerate(lines):
@@ -432,7 +432,8 @@ class Screen:
         self.src = src.crop((x0, y0, x1, y1))
         self.origin = (x0, y0)
         w, h = size
-        self.card_w = min(int(w * (0.84 if w > h else 0.9)), int(h * 0.76 * self.src.width / self.src.height))
+        # `scale` shrinks a card that would otherwise reach down into the caption zone (a tall crop of a wide screen).
+        self.card_w = int(min(int(w * (0.84 if w > h else 0.9)), int(h * 0.76 * self.src.width / self.src.height)) * float(spec.get("scale", 1.0)))
         self.card_h = int(self.card_w * self.src.height / self.src.width)
         self.cx, self.cy = w / 2, h * float(spec.get("y", 0.47))
 
@@ -501,8 +502,11 @@ def render_scene(scene: dict, out: Path, size, root: Path, assets: Path, clip: P
             t = i / FPS
             if base_src is not None:
                 frame = next(base_src).copy()
-                if kind == "image":  # footage behind a screen is a mood, not the subject
-                    frame = Image.blend(frame, Image.new("RGB", size, NAVY), 0.45)
+                # Footage behind a screen is a mood, not the subject, so it is dimmed; a title scene can ask for the same (`dim`)
+                # when bright streaks would run through its headline.
+                dim = float(scene.get("dim", 0.45 if kind == "image" else 0.0))
+                if dim > 0:
+                    frame = Image.blend(frame, Image.new("RGB", size, NAVY), dim)
                 if push:
                     z = lerp(push[0], push[1], t / max(float(scene["seconds"]), 0.1))
                     if z > 1.001:

@@ -447,7 +447,10 @@ def script_of(project: Project, plan: dict) -> dict:
         room = scene["end"] - start - 0.12
         words = len(scene["vo"].split())
         speaker = scene.get("speaker", "narrator")
-        line = {"id": len(lines) + 1, "start": round(start, 3), "end": round(start + min(room, max(words / 2.4, 0.5)), 3),
+        # The slot is where the line should end. It is estimated from the word count unless the scene says how long the
+        # voice really takes (`vo_len`, in seconds), which a slowly read list or a drawn-out line needs.
+        length = float(scene["vo_len"]) if scene.get("vo_len") else max(words / 2.4, 0.5)
+        line = {"id": len(lines) + 1, "start": round(start, 3), "end": round(start + min(room, length), 3),
                 "speaker": speaker, "text": scene["vo"]}
         for key in ("say", "style"):
             if scene.get(key):
@@ -825,7 +828,7 @@ def check(project: Project, aspect: str = "16:9", frames_ok: bool = False, liste
             elif abs(late) > verify.OFFSET:
                 problems.append({"problem": f"the voices sit {late:+.2f} s from where the plan puts them"})
         problems += verify.audio_problems(lines, heard)
-        problems += verify.caption_problems(folder, lines, f"captions_{tag}.srt")
+        problems += verify.caption_problems(folder, lines, f"captions_{tag}.srt", ASPECTS[aspect])
         report = json.loads((folder / "voice.json").read_text(encoding="utf-8")) if (folder / "voice.json").is_file() else {}
         if report.get("script") != voices.script_hash(lines):
             problems.append({"problem": "the voice was spoken from a different script than the plan now gives: speak again"})
